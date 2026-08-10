@@ -1,0 +1,6 @@
+.env
+.Claude/
+.DS_Store
+db/
+migrations/
+

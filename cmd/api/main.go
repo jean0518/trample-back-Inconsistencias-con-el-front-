@@ -10,10 +10,13 @@ import (
 	"time"
 
 	httpadapter "trample-back/internal/adapters/in/http"
+	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
 	"trample-back/internal/adapters/out/trm"
+	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
 	"trample-back/pkg/config"
+	"trample-back/pkg/db"
 	"trample-back/pkg/logger"
 )
 
@@ -25,12 +28,32 @@ func main() {
 
 	log := logger.New()
 
+	pool := db.Connect(cfg.DatabaseURL)
+	defer pool.Close()
+
+	// Clientes externos
 	scrydexClient := scrydex.NewClient(cfg.ScrydexAPIKey, cfg.ScrydexTeamID)
 	trmClient := trm.NewClient()
 
-	catalogUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
-	cardHandler := httpadapter.NewCardHandler(catalogUC)
-	router := httpadapter.NewRouter(cardHandler)
+	// Repositorios
+	expansionRepo := postgres.NewExpansionRepository(pool)
+	cardRepo := postgres.NewCardRepository(pool)
+	userRepo := postgres.NewUserRepository(pool)
+
+	// Casos de uso
+	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
+	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
+	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo, expansionRepo)
+	registerUC := appAuth.NewRegisterUseCase(userRepo)
+	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
+
+	// Router
+	router := httpadapter.NewRouter(httpadapter.Handlers{
+		Auth:      httpadapter.NewAuthHandler(registerUC, loginUC),
+		Pokemon:   httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
+		Magic:     httpadapter.NewMagicHandler(searchUC),
+		Riftbound: httpadapter.NewRiftboundHandler(searchUC),
+	})
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

@@ -16,4 +16,5 @@ type SearchParams struct {
 type ScrydexClient interface {
 	SearchCards(ctx context.Context, p SearchParams) ([]catalog.Card, error)
 	FetchCard(ctx context.Context, gameCode, externalID string, variants []string) (*catalog.Card, error)
+	FetchExpansions(ctx context.Context, gameCode string) ([]catalog.Expansion, error)
 }

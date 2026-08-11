@@ -136,6 +136,47 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 	return cards, nil
 }
 
+func (c *Client) FetchExpansions(ctx context.Context, gameCode string) ([]catalog.Expansion, error) {
+	const pageSize = 100
+
+	var envelope struct {
+		Data       []scrydexExp `json:"data"`
+		TotalCount int          `json:"total_count"`
+	}
+
+	var all []catalog.Expansion
+	page := 1
+
+	for {
+		endpoint := fmt.Sprintf("%s/%s/v1/expansions?page_size=%d&page=%d", baseURL, gameCode, pageSize, page)
+		slog.Info("scrydex expansions request", slog.String("url", endpoint))
+
+		if err := c.get(ctx, endpoint, &envelope); err != nil {
+			return nil, err
+		}
+
+		for _, e := range envelope.Data {
+			all = append(all, catalog.Expansion{
+				ExternalID:  e.ID,
+				Name:        e.Name,
+				Series:      e.Series,
+				Code:        e.Code,
+				Total:       e.Total,
+				ReleaseDate: e.ReleaseDate,
+				Logo:        e.Logo,
+				Symbol:      e.Symbol,
+			})
+		}
+
+		if len(all) >= envelope.TotalCount || len(envelope.Data) < pageSize {
+			break
+		}
+		page++
+	}
+
+	return all, nil
+}
+
 func (c *Client) FetchCard(ctx context.Context, gameCode, externalID string, variants []string) (*catalog.Card, error) {
 	endpoint := fmt.Sprintf(
 		"%s/%s/v1/cards/%s?include=prices,images,variants",

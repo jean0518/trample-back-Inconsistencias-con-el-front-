@@ -23,7 +23,16 @@ func NewPokemonHandler(
 	return &PokemonHandler{search: search, expansions: expansions, importCard: importCard}
 }
 
-// POST /scrydex/pokemon/cards
+// Search busca cartas de Pokémon en Scrydex.
+//
+//	@Summary      Buscar cartas Pokémon
+//	@Tags         pokemon
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string}  false  "Filtros de búsqueda"
+//	@Success      200   {array}   catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/pokemon/cards [post]
 func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
@@ -49,7 +58,17 @@ func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, cards)
 }
 
-// POST /scrydex/pokemon/cards/{id}
+// FetchOne obtiene una carta de Pokémon por ID.
+//
+//	@Summary      Obtener carta Pokémon por ID
+//	@Tags         pokemon
+//	@Accept       json
+//	@Produce      json
+//	@Param        id    path      string                       true   "ID de la carta"
+//	@Param        body  body      object{variants=[]string}    false  "Variantes"
+//	@Success      200   {object}  catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/pokemon/cards/{id} [post]
 func (h *PokemonHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Variants []string `json:"variants"`
@@ -66,7 +85,14 @@ func (h *PokemonHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, card)
 }
 
-// POST /admin/pokemon/expansions/sync
+// SyncExpansions sincroniza las expansiones de Pokémon desde Scrydex.
+//
+//	@Summary      Sincronizar expansiones Pokémon
+//	@Tags         admin
+//	@Produce      json
+//	@Success      200  {object}  object{synced=integer}
+//	@Failure      500  {object}  object{error=string}
+//	@Router       /admin/pokemon/expansions/sync [post]
 func (h *PokemonHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) {
 	count, err := h.expansions.SyncPokemon(r.Context())
 	if err != nil {
@@ -76,7 +102,14 @@ func (h *PokemonHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, map[string]int{"synced": count})
 }
 
-// GET /catalog/pokemon/expansions
+// ListExpansions lista las expansiones de Pokémon guardadas localmente.
+//
+//	@Summary      Listar expansiones Pokémon
+//	@Tags         pokemon
+//	@Produce      json
+//	@Success      200  {array}   catalog.Card
+//	@Failure      500  {object}  object{error=string}
+//	@Router       /catalog/pokemon/expansions [get]
 func (h *PokemonHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
 	expansions, err := h.expansions.ListPokemon(r.Context())
 	if err != nil {
@@ -86,7 +119,17 @@ func (h *PokemonHandler) ListExpansions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, expansions)
 }
 
-// POST /admin/pokemon/cards/import
+// ImportCard importa cartas de Pokémon al catálogo local.
+//
+//	@Summary      Importar cartas Pokémon
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{name=string,expansion_name=string,rarity=string}  true  "Datos de la carta"
+//	@Success      200   {object}  object{imported=integer,cards=[]catalog.Card}
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      500   {object}  object{error=string}
+//	@Router       /admin/pokemon/cards/import [post]
 func (h *PokemonHandler) ImportCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string `json:"name"`

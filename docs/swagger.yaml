@@ -1,0 +1,578 @@
+basePath: /
+definitions:
+  catalog.Card:
+    properties:
+      abilities:
+        items:
+          type: object
+        type: array
+      artist:
+        type: string
+      attacks:
+        items:
+          type: object
+        type: array
+      evolves_from:
+        items:
+          type: string
+        type: array
+      expansion:
+        $ref: '#/definitions/catalog.Expansion'
+      expansion_sort_order:
+        type: integer
+      external_id:
+        type: string
+      flavor_text:
+        type: string
+      hp:
+        type: string
+      images:
+        items:
+          $ref: '#/definitions/catalog.Image'
+        type: array
+      language:
+        type: string
+      language_code:
+        type: string
+      name:
+        type: string
+      national_pokedex_numbers:
+        items:
+          type: integer
+        type: array
+      number:
+        type: string
+      printed_number:
+        type: string
+      rarity:
+        type: string
+      rarity_code:
+        type: string
+      resistances:
+        items:
+          type: object
+        type: array
+      retreat_cost:
+        items:
+          type: string
+        type: array
+      subtypes:
+        items:
+          type: string
+        type: array
+      supertype:
+        type: string
+      types:
+        items:
+          type: string
+        type: array
+      variants:
+        items:
+          $ref: '#/definitions/catalog.Variant'
+        type: array
+      weaknesses:
+        items:
+          type: object
+        type: array
+    type: object
+  catalog.Expansion:
+    properties:
+      code:
+        type: string
+      external_id:
+        type: string
+      language:
+        type: string
+      language_code:
+        type: string
+      logo:
+        type: string
+      name:
+        type: string
+      printed_total:
+        type: integer
+      release_date:
+        type: string
+      series:
+        type: string
+      symbol:
+        type: string
+      total:
+        type: integer
+    type: object
+  catalog.Image:
+    properties:
+      large:
+        type: string
+      medium:
+        type: string
+      small:
+        type: string
+      type:
+        type: string
+    type: object
+  catalog.Marketplace:
+    properties:
+      name:
+        type: string
+      product_id:
+        type: string
+      purchase_url:
+        type: string
+    type: object
+  catalog.Price:
+    properties:
+      low_cop:
+        type: integer
+      low_usd:
+        type: number
+      market_cop:
+        type: integer
+      market_usd:
+        type: number
+      trm_used:
+        type: number
+    type: object
+  catalog.Variant:
+    properties:
+      images:
+        items:
+          $ref: '#/definitions/catalog.Image'
+        type: array
+      marketplaces:
+        items:
+          $ref: '#/definitions/catalog.Marketplace'
+        type: array
+      name:
+        type: string
+      nm_price:
+        $ref: '#/definitions/catalog.Price'
+      origin:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: API para el catálogo de cartas coleccionables.
+  title: Trample API
+  version: "1.0"
+paths:
+  /admin/pokemon/cards/import:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datos de la carta
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            expansion_name:
+              type: string
+            name:
+              type: string
+            rarity:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              cards:
+                items:
+                  $ref: '#/definitions/catalog.Card'
+                type: array
+              imported:
+                type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Importar cartas Pokémon
+      tags:
+      - admin
+  /admin/pokemon/expansions/sync:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              synced:
+                type: integer
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Sincronizar expansiones Pokémon
+      tags:
+      - admin
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Credenciales
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              token:
+                type: string
+            type: object
+        "401":
+          description: Credenciales inválidas
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Iniciar sesión
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datos del nuevo usuario
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            first_name:
+              type: string
+            last_name:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              email:
+                type: string
+              first_name:
+                type: string
+              id:
+                type: integer
+              last_name:
+                type: string
+            type: object
+        "409":
+          description: Email ya registrado
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+        "422":
+          description: Contraseña muy corta
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Registrar usuario
+      tags:
+      - auth
+  /catalog/pokemon/expansions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/catalog.Card'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Listar expansiones Pokémon
+      tags:
+      - pokemon
+  /scrydex/magic/cards:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Filtros
+        in: body
+        name: body
+        schema:
+          properties:
+            expansion_code:
+              type: string
+            name:
+              type: string
+            rarity:
+              type: string
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/catalog.Card'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Buscar cartas Magic
+      tags:
+      - magic
+  /scrydex/magic/cards/{id}:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID de la carta
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Variantes
+        in: body
+        name: body
+        schema:
+          properties:
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/catalog.Card'
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Obtener carta Magic por ID
+      tags:
+      - magic
+  /scrydex/pokemon/cards:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Filtros de búsqueda
+        in: body
+        name: body
+        schema:
+          properties:
+            expansion_code:
+              type: string
+            name:
+              type: string
+            rarity:
+              type: string
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/catalog.Card'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Buscar cartas Pokémon
+      tags:
+      - pokemon
+  /scrydex/pokemon/cards/{id}:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID de la carta
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Variantes
+        in: body
+        name: body
+        schema:
+          properties:
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/catalog.Card'
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Obtener carta Pokémon por ID
+      tags:
+      - pokemon
+  /scrydex/riftbound/cards:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Filtros
+        in: body
+        name: body
+        schema:
+          properties:
+            expansion_code:
+              type: string
+            name:
+              type: string
+            rarity:
+              type: string
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/catalog.Card'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Buscar cartas Riftbound
+      tags:
+      - riftbound
+  /scrydex/riftbound/cards/{id}:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID de la carta
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Variantes
+        in: body
+        name: body
+        schema:
+          properties:
+            variants:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/catalog.Card'
+        "400":
+          description: Bad Request
+          schema:
+            properties:
+              error:
+                type: string
+            type: object
+      summary: Obtener carta Riftbound por ID
+      tags:
+      - riftbound
+securityDefinitions:
+  BearerAuth:
+    description: 'Ingresá el token con el prefijo Bearer. Ej: "Bearer eyJ..."'
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

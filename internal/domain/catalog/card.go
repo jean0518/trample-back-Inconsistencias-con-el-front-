@@ -20,10 +20,10 @@ type Card struct {
 	ExpansionSortOrder  int             `json:"expansion_sort_order,omitempty"`
 	NationalPokedexNums []int           `json:"national_pokedex_numbers,omitempty"`
 	EvolvesFrom         []string        `json:"evolves_from,omitempty"`
-	Abilities           json.RawMessage `json:"abilities,omitempty"`
-	Attacks             json.RawMessage `json:"attacks,omitempty"`
-	Weaknesses          json.RawMessage `json:"weaknesses,omitempty"`
-	Resistances         json.RawMessage `json:"resistances,omitempty"`
+	Abilities           json.RawMessage `json:"abilities,omitempty"   swaggertype:"array,object"`
+	Attacks             json.RawMessage `json:"attacks,omitempty"     swaggertype:"array,object"`
+	Weaknesses          json.RawMessage `json:"weaknesses,omitempty"  swaggertype:"array,object"`
+	Resistances         json.RawMessage `json:"resistances,omitempty" swaggertype:"array,object"`
 	RetreatCost         []string        `json:"retreat_cost,omitempty"`
 	Expansion           Expansion       `json:"expansion"`
 	Images              []Image         `json:"images"`

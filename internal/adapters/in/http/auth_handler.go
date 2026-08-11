@@ -16,6 +16,17 @@ func NewAuthHandler(register *appAuth.RegisterUseCase, login *appAuth.LoginUseCa
 	return &AuthHandler{register: register, login: login}
 }
 
+// Register crea una nueva cuenta de usuario.
+//
+//	@Summary      Registrar usuario
+//	@Tags         auth
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{first_name=string,last_name=string,email=string,password=string}  true  "Datos del nuevo usuario"
+//	@Success      201   {object}  object{id=integer,first_name=string,last_name=string,email=string}
+//	@Failure      409   {object}  object{error=string}  "Email ya registrado"
+//	@Failure      422   {object}  object{error=string}  "Contraseña muy corta"
+//	@Router       /auth/register [post]
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		FirstName string `json:"first_name"`
@@ -51,6 +62,16 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Login autentica al usuario y devuelve un JWT.
+//
+//	@Summary      Iniciar sesión
+//	@Tags         auth
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{email=string,password=string}  true  "Credenciales"
+//	@Success      200   {object}  object{token=string}
+//	@Failure      401   {object}  object{error=string}  "Credenciales inválidas"
+//	@Router       /auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`

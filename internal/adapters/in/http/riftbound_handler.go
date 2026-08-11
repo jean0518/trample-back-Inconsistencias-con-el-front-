@@ -17,6 +17,16 @@ func NewRiftboundHandler(catalog *appCatalog.SearchScrydex) *RiftboundHandler {
 	return &RiftboundHandler{catalog: catalog}
 }
 
+// Search busca cartas de Riftbound en Scrydex.
+//
+//	@Summary      Buscar cartas Riftbound
+//	@Tags         riftbound
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string}  false  "Filtros"
+//	@Success      200   {array}   catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/riftbound/cards [post]
 func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
@@ -42,6 +52,17 @@ func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, cards)
 }
 
+// FetchOne obtiene una carta de Riftbound por ID.
+//
+//	@Summary      Obtener carta Riftbound por ID
+//	@Tags         riftbound
+//	@Accept       json
+//	@Produce      json
+//	@Param        id    path      string                     true   "ID de la carta"
+//	@Param        body  body      object{variants=[]string}  false  "Variantes"
+//	@Success      200   {object}  catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/riftbound/cards/{id} [post]
 func (h *RiftboundHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Variants []string `json:"variants"`

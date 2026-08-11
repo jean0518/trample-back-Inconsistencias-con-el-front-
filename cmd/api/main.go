@@ -1,3 +1,12 @@
+// @title           Trample API
+// @version         1.0
+// @description     API para el catálogo de cartas coleccionables.
+// @host            localhost:8080
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Ingresá el token con el prefijo Bearer. Ej: "Bearer eyJ..."
 package main
 
 import (
@@ -15,6 +24,7 @@ import (
 	"trample-back/internal/adapters/out/trm"
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
+	_ "trample-back/docs"
 	"trample-back/pkg/config"
 	"trample-back/pkg/db"
 	"trample-back/pkg/logger"

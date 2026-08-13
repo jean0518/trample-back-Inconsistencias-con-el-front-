@@ -6,10 +6,10 @@ import (
 )
 
 type SearchParams struct {
-	GameCode      string `json:"game_code"`
-	Name          string `json:"name"`
-	ExpansionCode string `json:"expansion_code"`
-	Rarity        string `json:"rarity"`
+	GameCode      string   `json:"game_code"`
+	Name          string   `json:"name"`
+	ExpansionCode string   `json:"expansion_code"`
+	Rarity        string   `json:"rarity"`
 	Variants      []string `json:"variants"`
 }
 

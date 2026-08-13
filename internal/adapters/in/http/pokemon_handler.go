@@ -107,7 +107,7 @@ func (h *PokemonHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) 
 //	@Summary      Listar expansiones Pokémon
 //	@Tags         pokemon
 //	@Produce      json
-//	@Success      200  {array}   catalog.Card
+//	@Success      200  {array}   catalog.Expansion
 //	@Failure      500  {object}  object{error=string}
 //	@Router       /catalog/pokemon/expansions [get]
 func (h *PokemonHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {

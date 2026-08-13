@@ -2,7 +2,7 @@ package auth
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"trample-back/internal/domain/auth"
 	"trample-back/internal/ports/out"
 
@@ -24,11 +24,23 @@ type RegisterInput struct {
 	Password  string
 }
 
-var ErrPasswordTooShort = errors.New("password must be at least 6 characters")
-
 func (uc *RegisterUseCase) Execute(ctx context.Context, in RegisterInput) (auth.User, error) {
+	firstName := strings.TrimSpace(in.FirstName)
+	lastName := strings.TrimSpace(in.LastName)
+	email := strings.TrimSpace(in.Email)
+
+	if firstName == "" || lastName == "" {
+		return auth.User{}, ErrInvalidName
+	}
+	if err := validateEmail(email); err != nil {
+		return auth.User{}, err
+	}
 	if len(in.Password) < 6 {
 		return auth.User{}, ErrPasswordTooShort
+	}
+
+	if existing, err := uc.users.FindByEmail(ctx, email); err == nil && existing.ID > 0 {
+		return auth.User{}, auth.ErrEmailTaken
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -37,9 +49,10 @@ func (uc *RegisterUseCase) Execute(ctx context.Context, in RegisterInput) (auth.
 	}
 
 	return uc.users.Create(ctx, auth.User{
-		FirstName: in.FirstName,
-		LastName:  in.LastName,
-		Email:     in.Email,
+		FirstName: firstName,
+		LastName:  lastName,
+		Email:     email,
 		Password:  string(hash),
+		Role:      auth.RoleCustomer,
 	})
 }

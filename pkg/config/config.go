@@ -17,21 +17,39 @@ type Config struct {
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
+
+	dbURL, err := require("DATABASE_URL")
+	if err != nil {
+		return nil, err
+	}
+	scrydexKey, err := require("SCRYDEX_API_KEY")
+	if err != nil {
+		return nil, err
+	}
+	scrydexTeam, err := require("SCRYDEX_TEAM_ID")
+	if err != nil {
+		return nil, err
+	}
+	jwtSecret, err := require("JWT_SECRET")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		Port:          envOr("PORT", "8080"),
-		DatabaseURL:   require("DATABASE_URL"),
-		ScrydexAPIKey: require("SCRYDEX_API_KEY"),
-		ScrydexTeamID: require("SCRYDEX_TEAM_ID"),
-		JWTSecret:     require("JWT_SECRET"),
+		DatabaseURL:   dbURL,
+		ScrydexAPIKey: scrydexKey,
+		ScrydexTeamID: scrydexTeam,
+		JWTSecret:     jwtSecret,
 	}, nil
 }
 
-func require(key string) string {
+func require(key string) (string, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		panic(fmt.Sprintf("env var %s is required", key))
+		return "", fmt.Errorf("env var %s is required", key)
 	}
-	return v
+	return v, nil
 }
 
 func envOr(key, def string) string {

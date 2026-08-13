@@ -1,0 +1,8 @@
+* text=auto
+
+# Forzar LF en Go para que gofmt funcione igual en Windows y CI
+*.go text eol=lf
+
+# Binarios y logs
+*.exe binary
+*.log binary

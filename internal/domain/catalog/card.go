@@ -52,11 +52,11 @@ type Image struct {
 }
 
 type Variant struct {
-	Name        string      `json:"name"`
-	Origin      string      `json:"origin,omitempty"`
-	Images      []Image     `json:"images"`
+	Name         string        `json:"name"`
+	Origin       string        `json:"origin,omitempty"`
+	Images       []Image       `json:"images"`
 	Marketplaces []Marketplace `json:"marketplaces,omitempty"`
-	NMPrice     *Price      `json:"nm_price"`
+	NMPrice      *Price        `json:"nm_price"`
 }
 
 type Marketplace struct {

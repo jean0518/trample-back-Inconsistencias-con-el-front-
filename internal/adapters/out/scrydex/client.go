@@ -77,7 +77,7 @@ type scrydexExp struct {
 	Total        int    `json:"total"`
 	PrintedTotal int    `json:"printed_total"`
 	Language     string `json:"language"`
-	LanguageCode string  `json:"language_code"`
+	LanguageCode string `json:"language_code"`
 	ReleaseDate  string `json:"release_date"`
 	Logo         string `json:"logo"`
 	Symbol       string `json:"symbol"`
@@ -91,11 +91,11 @@ type scrydexImage struct {
 }
 
 type scrydexVariant struct {
-	Name         string              `json:"name"`
-	Origin       string              `json:"origin"`
-	Images       []scrydexImage      `json:"images"`
+	Name         string               `json:"name"`
+	Origin       string               `json:"origin"`
+	Images       []scrydexImage       `json:"images"`
 	Marketplaces []scrydexMarketplace `json:"marketplaces"`
-	Prices       []scrydexPrice      `json:"prices"`
+	Prices       []scrydexPrice       `json:"prices"`
 }
 
 type scrydexMarketplace struct {
@@ -114,7 +114,7 @@ type scrydexPrice struct {
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
-	q := buildQuery(p.Name, p.ExpansionCode, p.Rarity)
+	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity)
 	endpoint := fmt.Sprintf(
 		"%s/%s/v1/cards?q=%s&include=prices,images,variants&page_size=20",
 		baseURL, p.GameCode, url.QueryEscape(q),
@@ -317,7 +317,7 @@ func toVariants(raw []scrydexVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-func buildQuery(name, expansionCode, rarity string) string {
+func buildQuery(gameCode, name, expansionCode, rarity string) string {
 	var parts []string
 	if name != "" {
 		parts = append(parts, "name:"+quote(name))
@@ -328,8 +328,11 @@ func buildQuery(name, expansionCode, rarity string) string {
 	if rarity != "" {
 		parts = append(parts, "rarity:"+quote(rarity))
 	}
-	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico)
-	parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
+	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
+	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
+	if gameCode == "pokemon" {
+		parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
+	}
 	return strings.Join(parts, " ")
 }
 

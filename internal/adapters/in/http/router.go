@@ -2,17 +2,21 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/httprate"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"trample-back/internal/domain/auth"
 )
 
 type Handlers struct {
-	Auth      *AuthHandler
-	Pokemon   *PokemonHandler
-	Magic     *MagicHandler
-	Riftbound *RiftboundHandler
+	Auth           *AuthHandler
+	Pokemon        *PokemonHandler
+	Magic          *MagicHandler
+	Riftbound      *RiftboundHandler
+	AuthMiddleware *AuthMiddleware
 }
 
 func NewRouter(h Handlers) http.Handler {
@@ -27,6 +31,7 @@ func NewRouter(h Handlers) http.Handler {
 	r.Get("/swagger/*", httpSwagger.WrapHandler)
 
 	r.Route("/auth", func(r chi.Router) {
+		r.Use(httprate.LimitByIP(10, time.Minute))
 		r.Post("/register", h.Auth.Register)
 		r.Post("/login", h.Auth.Login)
 	})
@@ -54,8 +59,10 @@ func NewRouter(h Handlers) http.Handler {
 		})
 	})
 
-	// Admin — sincronización e importación
+	// Admin — sincronización e importación (solo usuarios con rol "admin")
 	r.Route("/admin", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Post("/cards/import", h.Pokemon.ImportCard)

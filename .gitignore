@@ -4,3 +4,8 @@
 db/
 migrations/
 
+# Builds y artefactos
+bin/
+dist/
+*.exe
+*.log

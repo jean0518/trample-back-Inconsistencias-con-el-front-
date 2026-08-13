@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -15,11 +14,11 @@ import (
 const trmURL = "https://www.datos.gov.co/resource/32sa-8pi3.json?$limit=1&$order=vigenciadesde+DESC"
 
 type Client struct {
-	http      *http.Client
-	mu        sync.Mutex
-	cached    float64
-	cachedAt  time.Time
-	cacheTTL  time.Duration
+	http     *http.Client
+	mu       sync.Mutex
+	cached   float64
+	cachedAt time.Time
+	cacheTTL time.Duration
 }
 
 func NewClient() *Client {
@@ -31,11 +30,12 @@ func NewClient() *Client {
 
 func (c *Client) GetRate(ctx context.Context) (float64, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.cached > 0 && time.Since(c.cachedAt) < c.cacheTTL {
-		return c.cached, nil
+		rate := c.cached
+		c.mu.Unlock()
+		return rate, nil
 	}
+	c.mu.Unlock()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, trmURL, nil)
 	if err != nil {
@@ -48,8 +48,10 @@ func (c *Client) GetRate(ctx context.Context) (float64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	slog.Info("trm raw response", slog.String("body", string(body)))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("trm: leer respuesta: %w", err)
+	}
 
 	var rows []struct {
 		Valor string `json:"valor"`
@@ -66,7 +68,9 @@ func (c *Client) GetRate(ctx context.Context) (float64, error) {
 		return 0, fmt.Errorf("trm: valor inválido %q: %w", rows[0].Valor, err)
 	}
 
+	c.mu.Lock()
 	c.cached = rate
 	c.cachedAt = time.Now()
+	c.mu.Unlock()
 	return rate, nil
 }

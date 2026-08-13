@@ -3,7 +3,10 @@ package auth
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
+	"trample-back/internal/domain/auth"
 	"trample-back/internal/ports/out"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,23 +27,47 @@ type LoginInput struct {
 	Password string
 }
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
+var ErrInvalidCredentials = errors.New("credenciales inválidas")
 
-func (uc *LoginUseCase) Execute(ctx context.Context, in LoginInput) (string, error) {
-	user, err := uc.users.FindByEmail(ctx, in.Email)
+type LoginResult struct {
+	User  auth.User
+	Token string
+}
+
+func (uc *LoginUseCase) Execute(ctx context.Context, in LoginInput) (LoginResult, error) {
+	email := strings.TrimSpace(in.Email)
+	if err := validateEmail(email); err != nil {
+		return LoginResult{}, ErrInvalidCredentials
+	}
+
+	user, err := uc.users.FindByEmail(ctx, email)
 	if err != nil {
-		return "", ErrInvalidCredentials
+		return LoginResult{}, ErrInvalidCredentials
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(in.Password)); err != nil {
-		return "", ErrInvalidCredentials
+		return LoginResult{}, ErrInvalidCredentials
 	}
 
+	signed, err := uc.IssueToken(ctx, user)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return LoginResult{User: user, Token: signed}, nil
+}
+
+// IssueToken firma un JWT para un usuario ya autenticado (login o registro).
+func (uc *LoginUseCase) IssueToken(_ context.Context, user auth.User) (string, error) {
+	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":   user.ID,
+		"sub":   strconv.FormatInt(user.ID, 10),
 		"email": user.Email,
 		"name":  user.FirstName + " " + user.LastName,
-		"exp":   time.Now().Add(24 * time.Hour).Unix(),
+		"role":  user.Role,
+		"iss":   "trample-api",
+		"aud":   "trample-web",
+		"iat":   now.Unix(),
+		"exp":   now.Add(24 * time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(uc.jwtSecret)

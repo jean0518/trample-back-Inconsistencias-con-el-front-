@@ -18,13 +18,13 @@ import (
 	"syscall"
 	"time"
 
+	_ "trample-back/docs"
 	httpadapter "trample-back/internal/adapters/in/http"
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
 	"trample-back/internal/adapters/out/trm"
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
-	_ "trample-back/docs"
 	"trample-back/pkg/config"
 	"trample-back/pkg/db"
 	"trample-back/pkg/logger"
@@ -33,12 +33,17 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
+		slog.Error("configuración inválida", slog.Any("error", err))
 		os.Exit(1)
 	}
 
 	log := logger.New()
 
-	pool := db.Connect(cfg.DatabaseURL)
+	pool, err := db.Connect(cfg.DatabaseURL)
+	if err != nil {
+		log.Error("no se pudo conectar a la base de datos", slog.Any("error", err))
+		os.Exit(1)
+	}
 	defer pool.Close()
 
 	// Clientes externos
@@ -58,11 +63,13 @@ func main() {
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
 
 	// Router
+	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
-		Auth:      httpadapter.NewAuthHandler(registerUC, loginUC),
-		Pokemon:   httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
-		Magic:     httpadapter.NewMagicHandler(searchUC),
-		Riftbound: httpadapter.NewRiftboundHandler(searchUC),
+		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
+		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
+		Magic:          httpadapter.NewMagicHandler(searchUC),
+		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),
+		AuthMiddleware: authMiddleware,
 	})
 
 	srv := &http.Server{

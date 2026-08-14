@@ -114,10 +114,10 @@ type scrydexPrice struct {
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
-	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity)
+	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type)
 	endpoint := fmt.Sprintf(
-		"%s/%s/v1/cards?q=%s&include=prices,images,variants&page_size=20",
-		baseURL, p.GameCode, url.QueryEscape(q),
+		"%s%s/cards?q=%s&include=prices,images,variants&page_size=20",
+		baseURL, cardsPath(p.GameCode, p.Language), url.QueryEscape(q),
 	)
 
 	slog.Info("scrydex request", slog.String("url", endpoint), slog.Any("variant_filter", p.Variants))
@@ -317,7 +317,7 @@ func toVariants(raw []scrydexVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-func buildQuery(gameCode, name, expansionCode, rarity string) string {
+func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
 	var parts []string
 	if name != "" {
 		parts = append(parts, "name:"+quote(name))
@@ -328,12 +328,25 @@ func buildQuery(gameCode, name, expansionCode, rarity string) string {
 	if rarity != "" {
 		parts = append(parts, "rarity:"+quote(rarity))
 	}
+	if cardType != "" {
+		parts = append(parts, "types:"+quote(cardType))
+	}
 	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
 	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
 	if gameCode == "pokemon" {
 		parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
 	}
 	return strings.Join(parts, " ")
+}
+
+// cardsPath construye la ruta base de la API incluyendo el segmento de idioma.
+// Scrydex soporta el idioma en la URL: /pokemon/v1/en/cards (no como filtro q).
+func cardsPath(gameCode, language string) string {
+	path := fmt.Sprintf("/%s/v1", gameCode)
+	if language != "" {
+		path += "/" + url.PathEscape(language)
+	}
+	return path
 }
 
 func quote(v string) string {

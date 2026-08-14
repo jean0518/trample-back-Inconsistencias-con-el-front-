@@ -11,6 +11,8 @@ type SearchParams struct {
 	ExpansionCode string   `json:"expansion_code"`
 	Rarity        string   `json:"rarity"`
 	Variants      []string `json:"variants"`
+	Type          string   `json:"type"`
+	Language      string   `json:"language"`
 }
 
 type ScrydexClient interface {

@@ -54,11 +54,13 @@ func main() {
 	expansionRepo := postgres.NewExpansionRepository(pool)
 	cardRepo := postgres.NewCardRepository(pool)
 	userRepo := postgres.NewUserRepository(pool)
+	gameRepo := postgres.NewGameRepository(pool)
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo, expansionRepo)
+	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
 
@@ -66,6 +68,7 @@ func main() {
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
+		Games:          httpadapter.NewGamesHandler(gamesUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),

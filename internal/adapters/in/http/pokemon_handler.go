@@ -29,8 +29,8 @@ func NewPokemonHandler(
 //	@Tags         pokemon
 //	@Accept       json
 //	@Produce      json
-//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string}  false  "Filtros de búsqueda"
-//	@Success      200   {array}   catalog.Card
+//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string,language=string}  false  "Filtros de búsqueda (name es requerido)"
+//	@Success      200   {object}  object{search_id=string,total=integer,cards=[]catalog.Card}
 //	@Failure      400   {object}  object{error=string}
 //	@Router       /scrydex/pokemon/cards [post]
 func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -39,23 +39,31 @@ func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Variants      []string `json:"variants"`
+		Type          string   `json:"type"`
+		Language      string   `json:"language"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	cards, err := h.search.Search(r.Context(), out.SearchParams{
+	result, err := h.search.Search(r.Context(), out.SearchParams{
 		GameCode:      "pokemon",
 		Name:          body.Name,
 		ExpansionCode: body.ExpansionCode,
 		Rarity:        body.Rarity,
 		Variants:      body.Variants,
+		Type:          body.Type,
+		Language:      body.Language,
 	})
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	JSON(w, http.StatusOK, cards)
+	JSON(w, http.StatusOK, map[string]any{
+		"search_id": result.SearchID,
+		"total":     len(result.Cards),
+		"cards":     result.Cards,
+	})
 }
 
 // FetchOne obtiene una carta de Pokémon por ID.
@@ -147,6 +155,37 @@ func (h *PokemonHandler) ImportCard(w http.ResponseWriter, r *http.Request) {
 	cards, err := h.importCard.ImportPokemon(r.Context(), body.Name, body.ExpansionName, body.Rarity)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{
+		"imported": len(cards),
+		"cards":    cards,
+	})
+}
+
+// ImportCards importa las cartas seleccionadas de una búsqueda previa.
+//
+//	@Summary      Importar cartas seleccionadas de una búsqueda
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{search_id=string,external_ids=[]string}  true  "search_id devuelto por la búsqueda + IDs de las cartas elegidas"
+//	@Success      200   {object}  object{imported=integer,cards=[]catalog.Card}
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      500   {object}  object{error=string}
+//	@Router       /admin/cards/import [post]
+func (h *PokemonHandler) ImportCards(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SearchID    string   `json:"search_id"`
+		ExternalIDs []string `json:"external_ids"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+	cards, err := h.importCard.ImportBySearch(r.Context(), body.SearchID, body.ExternalIDs)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{

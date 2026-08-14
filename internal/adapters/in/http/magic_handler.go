@@ -23,33 +23,42 @@ func NewMagicHandler(catalog *appCatalog.SearchScrydex) *MagicHandler {
 //	@Tags         magic
 //	@Accept       json
 //	@Produce      json
-//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string}  false  "Filtros"
-//	@Success      200   {array}   catalog.Card
-//	@Failure      400   {object}  object{error=string}
-//	@Router       /scrydex/magic/cards [post]
+//
+// @Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string,language=string}  false  "Filtros (name es requerido)"
+// @Success      200   {object}  object{search_id=string,total=integer,cards=[]catalog.Card}
+// @Failure      400   {object}  object{error=string}
+// @Router       /scrydex/magic/cards [post]
 func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Variants      []string `json:"variants"`
+		Type          string   `json:"type"`
+		Language      string   `json:"language"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	cards, err := h.catalog.Search(r.Context(), out.SearchParams{
+	result, err := h.catalog.Search(r.Context(), out.SearchParams{
 		GameCode:      "mtg",
 		Name:          body.Name,
 		ExpansionCode: body.ExpansionCode,
 		Rarity:        body.Rarity,
 		Variants:      body.Variants,
+		Type:          body.Type,
+		Language:      body.Language,
 	})
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	JSON(w, http.StatusOK, cards)
+	JSON(w, http.StatusOK, map[string]any{
+		"search_id": result.SearchID,
+		"total":     len(result.Cards),
+		"cards":     result.Cards,
+	})
 }
 
 // FetchOne obtiene una carta de Magic por ID.

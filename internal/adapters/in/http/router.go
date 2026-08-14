@@ -13,6 +13,7 @@ import (
 
 type Handlers struct {
 	Auth           *AuthHandler
+	Games          *GamesHandler
 	Pokemon        *PokemonHandler
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
@@ -27,6 +28,8 @@ func NewRouter(h Handlers) http.Handler {
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	r.Get("/games", h.Games.List)
 
 	r.Get("/swagger/*", httpSwagger.WrapHandler)
 
@@ -63,6 +66,7 @@ func NewRouter(h Handlers) http.Handler {
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
+		r.Post("/cards/import", h.Pokemon.ImportCards)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Post("/cards/import", h.Pokemon.ImportCard)

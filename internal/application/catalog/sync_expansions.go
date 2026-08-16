@@ -54,3 +54,18 @@ func (uc *SyncExpansionsUseCase) ListByGameID(ctx context.Context, gameID int64)
 func (uc *SyncExpansionsUseCase) ListAll(ctx context.Context) ([]catalog.Expansion, error) {
 	return uc.repo.ListAll(ctx)
 }
+
+func (uc *SyncExpansionsUseCase) SyncMTG(ctx context.Context) (int, error) {
+	expansions, err := uc.scrydex.FetchExpansions(ctx, "mtg")
+	if err != nil {
+		return 0, fmt.Errorf("traer expansiones de scrydex: %w", err)
+	}
+	if err := uc.repo.SyncExpansions(ctx, "mtg", expansions); err != nil {
+		return 0, fmt.Errorf("guardar expansiones: %w", err)
+	}
+	return len(expansions), nil
+}
+
+func (uc *SyncExpansionsUseCase) ListMTG(ctx context.Context) ([]catalog.Expansion, error) {
+	return uc.repo.ListExpansions(ctx, "mtg")
+}

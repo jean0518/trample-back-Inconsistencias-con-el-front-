@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strconv"
 
 	appCatalog "trample-back/internal/application/catalog"
 	"trample-back/internal/ports/out"
@@ -10,11 +11,13 @@ import (
 )
 
 type MagicHandler struct {
-	catalog *appCatalog.SearchScrydex
+	search     *appCatalog.SearchScrydex
+	expansions *appCatalog.SyncExpansionsUseCase
+	importCard *appCatalog.ImportCardUseCase
 }
 
-func NewMagicHandler(catalog *appCatalog.SearchScrydex) *MagicHandler {
-	return &MagicHandler{catalog: catalog}
+func NewMagicHandler(search *appCatalog.SearchScrydex, expansions *appCatalog.SyncExpansionsUseCase, importCard *appCatalog.ImportCardUseCase) *MagicHandler {
+	return &MagicHandler{search: search, expansions: expansions, importCard: importCard}
 }
 
 // Search busca cartas de Magic en Scrydex.
@@ -40,7 +43,7 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	result, err := h.catalog.Search(r.Context(), out.SearchParams{
+	result, err := h.search.Search(r.Context(), out.SearchParams{
 		GameCode:      "mtg",
 		Name:          body.Name,
 		ExpansionCode: body.ExpansionCode,
@@ -59,17 +62,7 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// FetchOne obtiene una carta de Magic por ID.
-//
-//	@Summary      Obtener carta Magic por ID
-//	@Tags         magic
-//	@Accept       json
-//	@Produce      json
-//	@Param        id    path      string                     true   "ID de la carta"
-//	@Param        body  body      object{variants=[]string}  false  "Variantes"
-//	@Success      200   {object}  catalog.Card
-//	@Failure      400   {object}  object{error=string}
-//	@Router       /scrydex/magic/cards/{id} [post]
+// POST /scrydex/magic/cards/{id}
 func (h *MagicHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Variants []string `json:"variants"`
@@ -78,9 +71,84 @@ func (h *MagicHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	card, err := h.catalog.FetchOne(r.Context(), "mtg", chi.URLParam(r, "id"), body.Variants)
+	card, err := h.search.FetchOne(r.Context(), "mtg", chi.URLParam(r, "id"), body.Variants)
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, card)
+}
+
+// POST /admin/magic/expansions/sync
+func (h *MagicHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) {
+	count, err := h.expansions.SyncMTG(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"synced": count})
+}
+
+// GET /catalog/magic/expansions
+func (h *MagicHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
+	expansions, err := h.expansions.ListMTG(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, expansions)
+}
+
+// POST /admin/magic/cards/import
+func (h *MagicHandler) ImportCard(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name          string `json:"name"`
+		ExpansionName string `json:"expansion_name"`
+		Rarity        string `json:"rarity"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+	if body.Name == "" {
+		Error(w, http.StatusBadRequest, "name es requerido")
+		return
+	}
+	cards, err := h.importCard.ImportMTG(r.Context(), body.Name, body.ExpansionName, body.Rarity)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{
+		"imported": len(cards),
+		"cards":    cards,
+	})
+}
+
+// DELETE /admin/magic/cards/{id}
+func (h *MagicHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	if err := h.importCard.DeleteMTG(r.Context(), id); err != nil {
+		Error(w, http.StatusNotFound, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"deleted": chi.URLParam(r, "id")})
+}
+
+// PUT /admin/magic/cards/{id}
+func (h *MagicHandler) RefreshCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	card, err := h.importCard.RefreshMTG(r.Context(), id)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	JSON(w, http.StatusOK, card)

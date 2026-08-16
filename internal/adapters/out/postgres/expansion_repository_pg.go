@@ -47,13 +47,13 @@ func (r *ExpansionRepository) SyncExpansions(ctx context.Context, gameCode strin
 func (r *ExpansionRepository) FindByName(ctx context.Context, gameCode, name string) (*catalog.Expansion, error) {
 	var e catalog.Expansion
 	err := r.db.QueryRow(ctx, `
-		SELECT e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
+		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
 		FROM expansions e
 		JOIN games g ON g.id = e.game_id
 		WHERE g.code = $1 AND e.name ILIKE $2
 		ORDER BY e.release_date DESC
 		LIMIT 1
-	`, gameCode, name).Scan(&e.ExternalID, &e.Name, &e.Code, &e.Series, &e.Total, &e.ReleaseDate, &e.Logo, &e.Symbol)
+	`, gameCode, name).Scan(&e.ID, &e.GameID, &e.ExternalID, &e.Name, &e.Code, &e.Series, &e.Total, &e.ReleaseDate, &e.Logo, &e.Symbol)
 	if err != nil {
 		return nil, fmt.Errorf("expansión %q no encontrada en DB: %w", name, err)
 	}
@@ -62,7 +62,7 @@ func (r *ExpansionRepository) FindByName(ctx context.Context, gameCode, name str
 
 func (r *ExpansionRepository) ListExpansions(ctx context.Context, gameCode string) ([]catalog.Expansion, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
+		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
 		FROM expansions e
 		JOIN games g ON g.id = e.game_id
 		WHERE g.code = $1
@@ -72,11 +72,47 @@ func (r *ExpansionRepository) ListExpansions(ctx context.Context, gameCode strin
 		return nil, fmt.Errorf("listar expansiones: %w", err)
 	}
 	defer rows.Close()
+	return scanExpansions(rows)
+}
 
+func (r *ExpansionRepository) ListByGameID(ctx context.Context, gameID int64) ([]catalog.Expansion, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
+		FROM expansions e
+		WHERE e.game_id = $1
+		ORDER BY e.release_date DESC
+	`, gameID)
+	if err != nil {
+		return nil, fmt.Errorf("listar expansiones por juego: %w", err)
+	}
+	defer rows.Close()
+	return scanExpansions(rows)
+}
+
+func (r *ExpansionRepository) ListAll(ctx context.Context) ([]catalog.Expansion, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
+		FROM expansions e
+		ORDER BY e.release_date DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("listar expansiones: %w", err)
+	}
+	defer rows.Close()
+	return scanExpansions(rows)
+}
+
+type expansionRow interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+func scanExpansions(rows expansionRow) ([]catalog.Expansion, error) {
 	var result []catalog.Expansion
 	for rows.Next() {
 		var e catalog.Expansion
-		if err := rows.Scan(&e.ExternalID, &e.Name, &e.Code, &e.Series, &e.Total, &e.ReleaseDate, &e.Logo, &e.Symbol); err != nil {
+		if err := rows.Scan(&e.ID, &e.GameID, &e.ExternalID, &e.Name, &e.Code, &e.Series, &e.Total, &e.ReleaseDate, &e.Logo, &e.Symbol); err != nil {
 			return nil, err
 		}
 		result = append(result, e)

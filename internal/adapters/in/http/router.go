@@ -30,6 +30,7 @@ func NewRouter(h Handlers) http.Handler {
 	})
 
 	r.Get("/games", h.Games.List)
+	r.Get("/expansions", h.Games.ListExpansions)
 
 	r.Get("/swagger/*", httpSwagger.WrapHandler)
 

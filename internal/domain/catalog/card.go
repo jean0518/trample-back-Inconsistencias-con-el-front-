@@ -15,8 +15,6 @@ type Card struct {
 	RarityCode          string          `json:"rarity_code,omitempty"`
 	Artist              string          `json:"artist,omitempty"`
 	FlavorText          string          `json:"flavor_text,omitempty"`
-	Language            string          `json:"language,omitempty"`
-	LanguageCode        string          `json:"language_code,omitempty"`
 	ExpansionSortOrder  int             `json:"expansion_sort_order,omitempty"`
 	NationalPokedexNums []int           `json:"national_pokedex_numbers,omitempty"`
 	EvolvesFrom         []string        `json:"evolves_from,omitempty"`
@@ -31,14 +29,14 @@ type Card struct {
 }
 
 type Expansion struct {
+	ID           int64  `json:"id,omitempty"`
+	GameID       int64  `json:"game_id,omitempty"`
 	ExternalID   string `json:"external_id"`
 	Name         string `json:"name"`
 	Series       string `json:"series,omitempty"`
 	Code         string `json:"code,omitempty"`
 	Total        int    `json:"total,omitempty"`
 	PrintedTotal int    `json:"printed_total,omitempty"`
-	Language     string `json:"language,omitempty"`
-	LanguageCode string `json:"language_code,omitempty"`
 	ReleaseDate  string `json:"release_date,omitempty"`
 	Logo         string `json:"logo,omitempty"`
 	Symbol       string `json:"symbol,omitempty"`

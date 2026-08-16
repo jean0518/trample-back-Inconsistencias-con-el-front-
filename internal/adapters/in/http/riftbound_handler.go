@@ -24,7 +24,7 @@ func NewRiftboundHandler(catalog *appCatalog.SearchScrydex) *RiftboundHandler {
 //	@Accept       json
 //	@Produce      json
 //
-// @Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string,language=string}  false  "Filtros (name es requerido)"
+// @Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string}  false  "Filtros (name es requerido)"
 // @Success      200   {object}  object{search_id=string,total=integer,cards=[]catalog.Card}
 // @Failure      400   {object}  object{error=string}
 // @Router       /scrydex/riftbound/cards [post]
@@ -35,7 +35,6 @@ func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 		Rarity        string   `json:"rarity"`
 		Variants      []string `json:"variants"`
 		Type          string   `json:"type"`
-		Language      string   `json:"language"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
@@ -48,7 +47,6 @@ func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 		Rarity:        body.Rarity,
 		Variants:      body.Variants,
 		Type:          body.Type,
-		Language:      body.Language,
 	})
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())

@@ -68,7 +68,7 @@ func main() {
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
-		Games:          httpadapter.NewGamesHandler(gamesUC),
+		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),

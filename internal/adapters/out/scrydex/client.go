@@ -52,10 +52,8 @@ type scrydexCard struct {
 	PrintedNumber       string           `json:"printed_number"`
 	Rarity              string           `json:"rarity"`
 	RarityCode          string           `json:"rarity_code"`
-	Artist              string           `json:"artist"`
-	FlavorText          string           `json:"flavor_text"`
-	Language            string           `json:"language"`
-	LanguageCode        string           `json:"language_code"`
+	Artist              string          `json:"artist"`
+	FlavorText          string          `json:"flavor_text"`
 	ExpansionSortOrder  int              `json:"expansion_sort_order"`
 	NationalPokedexNums []int            `json:"national_pokedex_numbers"`
 	EvolvesFrom         []string         `json:"evolves_from"`
@@ -76,8 +74,6 @@ type scrydexExp struct {
 	Code         string `json:"code"`
 	Total        int    `json:"total"`
 	PrintedTotal int    `json:"printed_total"`
-	Language     string `json:"language"`
-	LanguageCode string `json:"language_code"`
 	ReleaseDate  string `json:"release_date"`
 	Logo         string `json:"logo"`
 	Symbol       string `json:"symbol"`
@@ -117,7 +113,7 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type)
 	endpoint := fmt.Sprintf(
 		"%s%s/cards?q=%s&include=prices,images,variants&page_size=20",
-		baseURL, cardsPath(p.GameCode, p.Language), url.QueryEscape(q),
+		baseURL, cardsPath(p.GameCode), url.QueryEscape(q),
 	)
 
 	slog.Info("scrydex request", slog.String("url", endpoint), slog.Any("variant_filter", p.Variants))
@@ -228,8 +224,6 @@ func toCard(s scrydexCard) catalog.Card {
 		RarityCode:          s.RarityCode,
 		Artist:              s.Artist,
 		FlavorText:          s.FlavorText,
-		Language:            s.Language,
-		LanguageCode:        s.LanguageCode,
 		ExpansionSortOrder:  s.ExpansionSortOrder,
 		NationalPokedexNums: s.NationalPokedexNums,
 		EvolvesFrom:         s.EvolvesFrom,
@@ -245,8 +239,6 @@ func toCard(s scrydexCard) catalog.Card {
 			Code:         s.Expansion.Code,
 			Total:        s.Expansion.Total,
 			PrintedTotal: s.Expansion.PrintedTotal,
-			Language:     s.Expansion.Language,
-			LanguageCode: s.Expansion.LanguageCode,
 			ReleaseDate:  s.Expansion.ReleaseDate,
 			Logo:         s.Expansion.Logo,
 			Symbol:       s.Expansion.Symbol,
@@ -339,14 +331,10 @@ func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
 	return strings.Join(parts, " ")
 }
 
-// cardsPath construye la ruta base de la API incluyendo el segmento de idioma.
-// Scrydex soporta el idioma en la URL: /pokemon/v1/en/cards (no como filtro q).
-func cardsPath(gameCode, language string) string {
-	path := fmt.Sprintf("/%s/v1", gameCode)
-	if language != "" {
-		path += "/" + url.PathEscape(language)
-	}
-	return path
+// cardsPath construye la ruta base de la API. La búsqueda usa el idioma por
+// defecto de Scrydex (inglés): /pokemon/v1/cards
+func cardsPath(gameCode string) string {
+	return fmt.Sprintf("/%s/v1", gameCode)
 }
 
 func quote(v string) string {

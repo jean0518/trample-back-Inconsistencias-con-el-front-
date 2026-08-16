@@ -39,11 +39,7 @@ func main() {
 
 	log := logger.New()
 
-	pool, err := db.Connect(cfg.DatabaseURL)
-	if err != nil {
-		log.Error("no se pudo conectar a la base de datos", slog.Any("error", err))
-		os.Exit(1)
-	}
+	pool := db.Connect(cfg.DatabaseURL)
 	defer pool.Close()
 
 	// Clientes externos

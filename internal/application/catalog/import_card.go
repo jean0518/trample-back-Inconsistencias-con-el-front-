@@ -95,12 +95,12 @@ func (uc *ImportCardUseCase) importByGame(ctx context.Context, gameCode, name, e
 		return nil, fmt.Errorf("buscar en scrydex: %w", err)
 	}
 
-	for _, card := range cards {
+	for _, card := range cards.Cards {
 		if err := uc.repo.SyncCard(ctx, gameCode, card); err != nil {
 			return nil, fmt.Errorf("guardar carta %q: %w", card.Name, err)
 		}
 	}
-	return cards, nil
+	return cards.Cards, nil
 }
 
 func (uc *ImportCardUseCase) refreshByGame(ctx context.Context, gameCode string, id int64) (*catalog.Card, error) {

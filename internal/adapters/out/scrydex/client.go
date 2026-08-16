@@ -465,11 +465,7 @@ func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-<<<<<<< HEAD
 func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
-=======
-func buildQuery(gameCode, name, expansionCode, rarity string) string {
->>>>>>> 1fe94c1 (Subo modulo de magic)
 	var parts []string
 	if name != "" {
 		parts = append(parts, "name:"+quote(name))
@@ -480,14 +476,11 @@ func buildQuery(gameCode, name, expansionCode, rarity string) string {
 	if rarity != "" {
 		parts = append(parts, "rarity:"+quote(rarity))
 	}
-<<<<<<< HEAD
 	if cardType != "" {
 		parts = append(parts, "types:"+quote(cardType))
 	}
 	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
 	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
-=======
->>>>>>> 1fe94c1 (Subo modulo de magic)
 	if gameCode == "pokemon" {
 		parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
 	}

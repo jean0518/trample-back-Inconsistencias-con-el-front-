@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -71,32 +72,60 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 		return fmt.Errorf("upsert carta: %w", err)
 	}
 
-	// 4. UPSERT detalles de Pokémon
-	hp, _ := strconv.Atoi(card.HP)
-	stage := ""
-	if len(card.Subtypes) > 0 {
-		stage = card.Subtypes[0]
-	}
-	evolvesFrom := strings.Join(card.EvolvesFrom, ", ")
-
-	_, err = tx.Exec(ctx, `
-		INSERT INTO pokemon_card_details (card_id, hp, types, evolves_from, stage, attacks, weaknesses, resistances, retreat_cost)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (card_id) DO UPDATE SET
-			hp           = EXCLUDED.hp,
-			types        = EXCLUDED.types,
-			evolves_from = EXCLUDED.evolves_from,
-			stage        = EXCLUDED.stage,
-			attacks      = EXCLUDED.attacks,
-			weaknesses   = EXCLUDED.weaknesses,
-			resistances  = EXCLUDED.resistances,
-			retreat_cost = EXCLUDED.retreat_cost
-	`, cardID, hp, card.Types, evolvesFrom, stage,
-		nullableJSON(card.Attacks), nullableJSON(card.Weaknesses), nullableJSON(card.Resistances),
-		len(card.RetreatCost),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert pokemon_card_details: %w", err)
+	// 4. Detalles específicos por juego
+	switch gameCode {
+	case "pokemon":
+		hp, _ := strconv.Atoi(card.HP)
+		stage := ""
+		if len(card.Subtypes) > 0 {
+			stage = card.Subtypes[0]
+		}
+		evolvesFrom := strings.Join(card.EvolvesFrom, ", ")
+		_, err = tx.Exec(ctx, `
+			INSERT INTO pokemon_card_details (card_id, hp, types, evolves_from, stage, attacks, weaknesses, resistances, retreat_cost)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			ON CONFLICT (card_id) DO UPDATE SET
+				hp           = EXCLUDED.hp,
+				types        = EXCLUDED.types,
+				evolves_from = EXCLUDED.evolves_from,
+				stage        = EXCLUDED.stage,
+				attacks      = EXCLUDED.attacks,
+				weaknesses   = EXCLUDED.weaknesses,
+				resistances  = EXCLUDED.resistances,
+				retreat_cost = EXCLUDED.retreat_cost
+		`, cardID, hp, card.Types, evolvesFrom, stage,
+			nullableJSON(card.Attacks), nullableJSON(card.Weaknesses), nullableJSON(card.Resistances),
+			len(card.RetreatCost),
+		)
+		if err != nil {
+			return fmt.Errorf("upsert pokemon_card_details: %w", err)
+		}
+	case "mtg":
+		rulesJSON, _ := json.Marshal(card.Rules)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO mtg_card_details (card_id, mana_cost, mana_value, colors, color_identity, power, toughness, type_line, rules, keywords, layout, faces, rulings)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			ON CONFLICT (card_id) DO UPDATE SET
+				mana_cost      = EXCLUDED.mana_cost,
+				mana_value     = EXCLUDED.mana_value,
+				colors         = EXCLUDED.colors,
+				color_identity = EXCLUDED.color_identity,
+				power          = EXCLUDED.power,
+				toughness      = EXCLUDED.toughness,
+				type_line      = EXCLUDED.type_line,
+				rules          = EXCLUDED.rules,
+				keywords       = EXCLUDED.keywords,
+				layout         = EXCLUDED.layout,
+				faces          = EXCLUDED.faces,
+				rulings        = EXCLUDED.rulings
+		`, cardID, card.ManaCost, card.ManaValue, card.Colors, card.ColorIdentity,
+			card.Power, card.Toughness, card.TypeLine,
+			nullableJSON(rulesJSON), card.Keywords, card.Layout,
+			nullableJSON(card.Faces), nullableJSON(card.Rulings),
+		)
+		if err != nil {
+			return fmt.Errorf("upsert mtg_card_details: %w", err)
+		}
 	}
 
 	// 5. Imágenes de la carta (delete + re-insert para mantenerlas actualizadas)
@@ -160,6 +189,26 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (r *CardRepository) GetExternalID(ctx context.Context, id int64) (string, error) {
+	var externalID string
+	err := r.db.QueryRow(ctx, `SELECT external_id FROM cards WHERE id = $1`, id).Scan(&externalID)
+	if err != nil {
+		return "", fmt.Errorf("carta %d no encontrada: %w", id, err)
+	}
+	return externalID, nil
+}
+
+func (r *CardRepository) DeleteCard(ctx context.Context, id int64) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM cards WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("eliminar carta: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("carta %d no encontrada", id)
+	}
+	return nil
 }
 
 func nullableJSON(raw []byte) interface{} {

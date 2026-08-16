@@ -111,6 +111,67 @@ type scrydexPrice struct {
 	Currency  string   `json:"currency"`
 }
 
+// --- Structs MTG ---
+
+type scrydexMTGEnvelope struct {
+	Data []scrydexMTGCard `json:"data"`
+}
+
+type scrydexMTGSingleEnvelope struct {
+	Data scrydexMTGCard `json:"data"`
+}
+
+type scrydexMTGCard struct {
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Supertypes     []string           `json:"supertypes"`
+	Subtypes       []string           `json:"subtypes"`
+	Types          []string           `json:"types"`
+	TypeLine       string             `json:"type"`
+	Number         string             `json:"number"`
+	ColorIdentity  []string           `json:"color_identity"`
+	Colors         []string           `json:"colors"`
+	ManaCost       string             `json:"mana_cost"`
+	ManaValue      int                `json:"mana_value"`
+	Power          string             `json:"power"`
+	Toughness      string             `json:"toughness"`
+	Rules          []string           `json:"rules"`
+	Rarity         string             `json:"rarity"`
+	Artist         string             `json:"artist"`
+	Keywords       []string           `json:"keywords"`
+	Layout         string             `json:"layout"`
+	Faces          json.RawMessage    `json:"faces"`
+	Images         []scrydexImage     `json:"images"`
+	Variants       []scrydexMTGVariant `json:"variants"`
+	Rulings        []scrydexMTGRuling `json:"rulings"`
+	Expansion      scrydexMTGExp      `json:"expansion"`
+	Language       string             `json:"language"`
+	LanguageCode   string             `json:"language_code"`
+}
+
+type scrydexMTGVariant struct {
+	Name        string         `json:"name"`
+	Images      []scrydexImage `json:"images"`
+	BorderColor string         `json:"border_color"`
+	Prices      []scrydexPrice `json:"prices"`
+}
+
+type scrydexMTGRuling struct {
+	Date string `json:"date"`
+	Text string `json:"text"`
+}
+
+type scrydexMTGExp struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Block       string `json:"block"`
+	Total       int    `json:"total"`
+	ReleaseDate string `json:"release_date"`
+	Logo        string `json:"logo"`
+	Symbol      string `json:"symbol"`
+}
+
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
@@ -122,11 +183,24 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 
 	slog.Info("scrydex request", slog.String("url", endpoint), slog.Any("variant_filter", p.Variants))
 
+	if p.GameCode == "mtg" {
+		var envelope scrydexMTGEnvelope
+		if err := c.get(ctx, endpoint, &envelope); err != nil {
+			return nil, err
+		}
+		cards := make([]catalog.Card, 0, len(envelope.Data))
+		for _, raw := range envelope.Data {
+			card := toMTGCard(raw)
+			card.Variants = filterVariants(card.Variants, p.Variants)
+			cards = append(cards, card)
+		}
+		return cards, nil
+	}
+
 	var envelope scrydexEnvelope
 	if err := c.get(ctx, endpoint, &envelope); err != nil {
 		return nil, err
 	}
-
 	cards := make([]catalog.Card, 0, len(envelope.Data))
 	for _, raw := range envelope.Data {
 		card := toCard(raw)
@@ -185,11 +259,20 @@ func (c *Client) FetchCard(ctx context.Context, gameCode, externalID string, var
 
 	slog.Info("scrydex request", slog.String("url", endpoint))
 
+	if gameCode == "mtg" {
+		var envelope scrydexMTGSingleEnvelope
+		if err := c.get(ctx, endpoint, &envelope); err != nil {
+			return nil, err
+		}
+		card := toMTGCard(envelope.Data)
+		card.Variants = filterVariants(card.Variants, variants)
+		return &card, nil
+	}
+
 	var envelope scrydexSingleEnvelope
 	if err := c.get(ctx, endpoint, &envelope); err != nil {
 		return nil, err
 	}
-
 	card := toCard(envelope.Data)
 	card.Variants = filterVariants(card.Variants, variants)
 	return &card, nil
@@ -315,9 +398,78 @@ func toVariants(raw []scrydexVariant) []catalog.Variant {
 	return variants
 }
 
+func toMTGCard(s scrydexMTGCard) catalog.Card {
+	rulingsJSON, _ := json.Marshal(s.Rulings)
+	return catalog.Card{
+		ExternalID:    s.ID,
+		Name:          s.Name,
+		Subtypes:      s.Subtypes,
+		Types:         s.Types,
+		TypeLine:      s.TypeLine,
+		Number:        s.Number,
+		Rarity:        s.Rarity,
+		Artist:        s.Artist,
+		Language:      s.Language,
+		LanguageCode:  s.LanguageCode,
+		Colors:        s.Colors,
+		ColorIdentity: s.ColorIdentity,
+		ManaCost:      s.ManaCost,
+		ManaValue:     s.ManaValue,
+		Power:         s.Power,
+		Toughness:     s.Toughness,
+		Rules:         s.Rules,
+		Keywords:      s.Keywords,
+		Layout:        s.Layout,
+		Faces:         s.Faces,
+		Rulings:       rulingsJSON,
+		Expansion: catalog.Expansion{
+			ExternalID:  s.Expansion.ID,
+			Name:        s.Expansion.Name,
+			Code:        s.Expansion.Code,
+			Series:      s.Expansion.Block,
+			Total:       s.Expansion.Total,
+			ReleaseDate: s.Expansion.ReleaseDate,
+			Logo:        s.Expansion.Logo,
+			Symbol:      s.Expansion.Symbol,
+		},
+		Images:   toImages(s.Images),
+		Variants: toMTGVariants(s.Variants),
+	}
+}
+
+func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
+	variants := make([]catalog.Variant, 0, len(raw))
+	for _, v := range raw {
+		var nmPrice *catalog.Price
+		for _, p := range v.Prices {
+			if p.Condition == "NM" {
+				low := 0.0
+				if p.Low != nil {
+					low = *p.Low
+				}
+				nmPrice = &catalog.Price{
+					MarketUSD: p.Market,
+					LowUSD:    low,
+				}
+				break
+			}
+		}
+		variants = append(variants, catalog.Variant{
+			Name:    v.Name,
+			Images:  toImages(v.Images),
+			NMPrice: nmPrice,
+		})
+	}
+	return variants
+}
+
 // --- Query builder ---
 
+<<<<<<< HEAD
 func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
+=======
+func buildQuery(gameCode, name, expansionCode, rarity string) string {
+>>>>>>> 1fe94c1 (Subo modulo de magic)
 	var parts []string
 	if name != "" {
 		parts = append(parts, "name:"+quote(name))
@@ -328,11 +480,14 @@ func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
 	if rarity != "" {
 		parts = append(parts, "rarity:"+quote(rarity))
 	}
+<<<<<<< HEAD
 	if cardType != "" {
 		parts = append(parts, "types:"+quote(cardType))
 	}
 	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
 	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
+=======
+>>>>>>> 1fe94c1 (Subo modulo de magic)
 	if gameCode == "pokemon" {
 		parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
 	}

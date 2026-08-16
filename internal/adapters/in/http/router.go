@@ -49,6 +49,7 @@ func NewRouter(h Handlers) http.Handler {
 			r.Post("/cards", h.Magic.Search)
 			r.Post("/cards/{id}", h.Magic.FetchOne)
 		})
+
 		r.Route("/riftbound", func(r chi.Router) {
 			r.Post("/cards", h.Riftbound.Search)
 			r.Post("/cards/{id}", h.Riftbound.FetchOne)
@@ -60,6 +61,9 @@ func NewRouter(h Handlers) http.Handler {
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Get("/expansions", h.Pokemon.ListExpansions)
 		})
+		r.Route("/magic", func(r chi.Router) {
+			r.Get("/expansions", h.Magic.ListExpansions)
+		})
 	})
 
 	// Admin — sincronización e importación (solo usuarios con rol "admin")
@@ -70,6 +74,14 @@ func NewRouter(h Handlers) http.Handler {
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Post("/cards/import", h.Pokemon.ImportCard)
+			r.Put("/cards/{id}", h.Pokemon.RefreshCard)
+			r.Delete("/cards/{id}", h.Pokemon.DeleteCard)
+		})
+		r.Route("/magic", func(r chi.Router) {
+			r.Post("/expansions/sync", h.Magic.SyncExpansions)
+			r.Post("/cards/import", h.Magic.ImportCard)
+			r.Put("/cards/{id}", h.Magic.RefreshCard)
+			r.Delete("/cards/{id}", h.Magic.DeleteCard)
 		})
 	})
 

@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strconv"
 
 	appCatalog "trample-back/internal/application/catalog"
 	"trample-back/internal/ports/out"
@@ -88,6 +89,35 @@ func (h *PokemonHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	card, err := h.search.FetchOne(r.Context(), "pokemon", chi.URLParam(r, "id"), body.Variants)
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, card)
+}
+
+// DeleteCard elimina una carta de Pokémon de la DB.
+func (h *PokemonHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	if err := h.importCard.DeletePokemon(r.Context(), id); err != nil {
+		Error(w, http.StatusNotFound, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"deleted": chi.URLParam(r, "id")})
+}
+
+// RefreshCard re-sincroniza una carta desde Scrydex (precios e imágenes frescos).
+func (h *PokemonHandler) RefreshCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	card, err := h.importCard.RefreshPokemon(r.Context(), id)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	JSON(w, http.StatusOK, card)

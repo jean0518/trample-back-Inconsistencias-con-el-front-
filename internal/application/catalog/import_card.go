@@ -52,18 +52,41 @@ func (uc *ImportCardUseCase) ImportBySearch(ctx context.Context, searchID string
 }
 
 func (uc *ImportCardUseCase) ImportPokemon(ctx context.Context, name, expansionName, rarity string) ([]catalog.Card, error) {
-	var expansionCode string
+	return uc.importByGame(ctx, "pokemon", name, expansionName, rarity)
+}
 
+func (uc *ImportCardUseCase) DeletePokemon(ctx context.Context, id int64) error {
+	return uc.repo.DeleteCard(ctx, id)
+}
+
+func (uc *ImportCardUseCase) RefreshPokemon(ctx context.Context, id int64) (*catalog.Card, error) {
+	return uc.refreshByGame(ctx, "pokemon", id)
+}
+
+func (uc *ImportCardUseCase) ImportMTG(ctx context.Context, name, expansionName, rarity string) ([]catalog.Card, error) {
+	return uc.importByGame(ctx, "mtg", name, expansionName, rarity)
+}
+
+func (uc *ImportCardUseCase) DeleteMTG(ctx context.Context, id int64) error {
+	return uc.repo.DeleteCard(ctx, id)
+}
+
+func (uc *ImportCardUseCase) RefreshMTG(ctx context.Context, id int64) (*catalog.Card, error) {
+	return uc.refreshByGame(ctx, "mtg", id)
+}
+
+func (uc *ImportCardUseCase) importByGame(ctx context.Context, gameCode, name, expansionName, rarity string) ([]catalog.Card, error) {
+	var expansionCode string
 	if expansionName != "" {
-		expansion, err := uc.expansionRepo.FindByName(ctx, "pokemon", expansionName)
+		expansion, err := uc.expansionRepo.FindByName(ctx, gameCode, expansionName)
 		if err != nil {
 			return nil, fmt.Errorf("expansión %q no encontrada: asegúrate de haber sincronizado las expansiones primero", expansionName)
 		}
 		expansionCode = expansion.ExternalID
 	}
 
-	result, err := uc.search.Search(ctx, out.SearchParams{
-		GameCode:      "pokemon",
+	cards, err := uc.search.Search(ctx, out.SearchParams{
+		GameCode:      gameCode,
 		Name:          name,
 		ExpansionCode: expansionCode,
 		Rarity:        rarity,
@@ -72,11 +95,25 @@ func (uc *ImportCardUseCase) ImportPokemon(ctx context.Context, name, expansionN
 		return nil, fmt.Errorf("buscar en scrydex: %w", err)
 	}
 
-	for _, card := range result.Cards {
-		if err := uc.repo.SyncCard(ctx, "pokemon", card); err != nil {
+	for _, card := range cards {
+		if err := uc.repo.SyncCard(ctx, gameCode, card); err != nil {
 			return nil, fmt.Errorf("guardar carta %q: %w", card.Name, err)
 		}
 	}
+	return cards, nil
+}
 
-	return result.Cards, nil
+func (uc *ImportCardUseCase) refreshByGame(ctx context.Context, gameCode string, id int64) (*catalog.Card, error) {
+	externalID, err := uc.repo.GetExternalID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	card, err := uc.search.FetchOne(ctx, gameCode, externalID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("re-fetch de scrydex: %w", err)
+	}
+	if err := uc.repo.SyncCard(ctx, gameCode, *card); err != nil {
+		return nil, fmt.Errorf("actualizar carta: %w", err)
+	}
+	return card, nil
 }

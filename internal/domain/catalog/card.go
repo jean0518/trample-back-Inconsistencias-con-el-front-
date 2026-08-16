@@ -25,6 +25,19 @@ type Card struct {
 	Weaknesses          json.RawMessage `json:"weaknesses,omitempty"  swaggertype:"array,object"`
 	Resistances         json.RawMessage `json:"resistances,omitempty" swaggertype:"array,object"`
 	RetreatCost         []string        `json:"retreat_cost,omitempty"`
+	// MTG
+	Colors        []string        `json:"colors,omitempty"`
+	ColorIdentity []string        `json:"color_identity,omitempty"`
+	ManaCost      string          `json:"mana_cost,omitempty"`
+	ManaValue     int             `json:"mana_value,omitempty"`
+	Power         string          `json:"power,omitempty"`
+	Toughness     string          `json:"toughness,omitempty"`
+	TypeLine      string          `json:"type_line,omitempty"`
+	Rules         []string        `json:"rules,omitempty"`
+	Keywords      []string        `json:"keywords,omitempty"`
+	Layout        string          `json:"layout,omitempty"`
+	Faces         json.RawMessage `json:"faces,omitempty"   swaggertype:"array,object"`
+	Rulings       json.RawMessage `json:"rulings,omitempty" swaggertype:"array,object"`
 	Expansion           Expansion       `json:"expansion"`
 	Images              []Image         `json:"images"`
 	Variants            []Variant       `json:"variants"`

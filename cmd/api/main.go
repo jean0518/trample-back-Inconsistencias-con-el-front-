@@ -70,7 +70,7 @@ func main() {
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
 		Games:          httpadapter.NewGamesHandler(gamesUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
-		Magic:          httpadapter.NewMagicHandler(searchUC),
+		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),
 		AuthMiddleware: authMiddleware,
 	})

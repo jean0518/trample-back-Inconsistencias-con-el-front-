@@ -17,6 +17,7 @@ type Handlers struct {
 	Pokemon        *PokemonHandler
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
+	Listings       *ListingHandler
 	AuthMiddleware *AuthMiddleware
 }
 
@@ -65,6 +66,14 @@ func NewRouter(h Handlers) http.Handler {
 		r.Route("/magic", func(r chi.Router) {
 			r.Get("/expansions", h.Magic.ListExpansions)
 		})
+	})
+
+	// Listings — inventario del vendedor autenticado
+	r.Route("/listings", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Get("/", h.Listings.List)
+		r.Post("/", h.Listings.Create)
+		r.Delete("/{id}", h.Listings.Delete)
 	})
 
 	// Admin — sincronización e importación (solo usuarios con rol "admin")

@@ -60,6 +60,7 @@ func main() {
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo, expansionRepo)
+	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
@@ -69,6 +70,7 @@ func main() {
 	router := httpadapter.NewRouter(httpadapter.Handlers{
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
+		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),

@@ -76,6 +76,31 @@ type Marketplace struct {
 	PurchaseURL string `json:"purchase_url"`
 }
 
+type CardSummary struct {
+	ID         int64           `json:"id"`
+	ExternalID string          `json:"external_id"`
+	Name       string          `json:"name"`
+	Number     string          `json:"number"`
+	Rarity     string          `json:"rarity"`
+	GameCode   string          `json:"game_code"`
+	Expansion  ExpansionBrief  `json:"expansion"`
+	Image      ImageBrief      `json:"image"`
+}
+
+type ExpansionBrief struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Code      string `json:"code"`
+	LogoURL   string `json:"logo_url"`
+	SymbolURL string `json:"symbol_url"`
+}
+
+type ImageBrief struct {
+	Small  string `json:"small"`
+	Medium string `json:"medium"`
+	Large  string `json:"large"`
+}
+
 type Price struct {
 	MarketUSD float64 `json:"market_usd"`
 	LowUSD    float64 `json:"low_usd"`

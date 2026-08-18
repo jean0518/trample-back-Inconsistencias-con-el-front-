@@ -458,7 +458,7 @@ func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
 func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
 	var parts []string
 	if name != "" {
-		parts = append(parts, "name:"+quote(name))
+		parts = append(parts, "name:"+quote(name)+"*")
 	}
 	if expansionCode != "" {
 		parts = append(parts, "expansion.id:"+quote(expansionCode))

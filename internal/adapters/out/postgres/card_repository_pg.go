@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"trample-back/internal/domain/catalog"
+	"trample-back/internal/ports/out"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -189,6 +190,62 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
+	offset := (p.Page - 1) * p.PageSize
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			c.id,
+			c.external_id,
+			c.name,
+			c.number,
+			c.rarity,
+			g.code,
+			e.id,
+			e.name,
+			e.code,
+			e.logo_url,
+			e.symbol_url,
+			COALESCE((SELECT ci.small_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
+			COALESCE((SELECT ci.medium_url FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
+			COALESCE((SELECT ci.large_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
+			COUNT(*) OVER() AS total
+		FROM cards c
+		JOIN games      g ON g.id = c.game_id
+		JOIN expansions e ON e.id = c.expansion_id
+		WHERE ($1::text   = '' OR g.code          = $1)
+		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
+		  AND ($3::text   = '' OR c.name ILIKE '%' || $3 || '%')
+		ORDER BY e.release_date DESC, c.id
+		LIMIT $4 OFFSET $5
+	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listar cartas: %w", err)
+	}
+	defer rows.Close()
+
+	var (
+		result []catalog.CardSummary
+		total  int
+	)
+	for rows.Next() {
+		var s catalog.CardSummary
+		if err := rows.Scan(
+			&s.ID, &s.ExternalID, &s.Name, &s.Number, &s.Rarity, &s.GameCode,
+			&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
+			&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
+			&s.Image.Small, &s.Image.Medium, &s.Image.Large,
+			&total,
+		); err != nil {
+			return nil, 0, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return result, total, nil
 }
 
 func (r *CardRepository) GetExternalID(ctx context.Context, id int64) (string, error) {

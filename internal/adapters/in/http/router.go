@@ -14,6 +14,7 @@ import (
 type Handlers struct {
 	Auth           *AuthHandler
 	Games          *GamesHandler
+	Catalog        *CatalogHandler
 	Pokemon        *PokemonHandler
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
@@ -44,6 +45,8 @@ func NewRouter(h Handlers) http.Handler {
 	// Scrydex — consultas en vivo a la API externa
 	r.Route("/scrydex", func(r chi.Router) {
 		r.Route("/pokemon", func(r chi.Router) {
+			r.Use(h.AuthMiddleware.RequireAuth)
+			r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 			r.Post("/cards", h.Pokemon.Search)
 			r.Post("/cards/{id}", h.Pokemon.FetchOne)
 		})
@@ -60,6 +63,7 @@ func NewRouter(h Handlers) http.Handler {
 
 	// Catalog — consultas a la DB local
 	r.Route("/catalog", func(r chi.Router) {
+		r.Get("/cards", h.Catalog.ListCards)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Get("/expansions", h.Pokemon.ListExpansions)
 		})

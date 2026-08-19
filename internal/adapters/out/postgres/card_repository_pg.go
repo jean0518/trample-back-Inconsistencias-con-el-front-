@@ -210,6 +210,17 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			COALESCE((SELECT ci.small_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.medium_url FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.large_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
+			COALESCE(
+				(SELECT json_agg(json_build_object(
+					'name',      cv.variant_name,
+					'price_usd', COALESCE(vp.price_usd, 0),
+					'price_cop', COALESCE(vp.price_cop, 0)
+				))
+				FROM card_variants cv
+				LEFT JOIN variant_prices vp ON vp.variant_id = cv.id AND vp.condition = 'near_mint'
+				WHERE cv.card_id = c.id),
+				'[]'
+			)::text,
 			COUNT(*) OVER() AS total
 		FROM cards c
 		JOIN games      g ON g.id = c.game_id
@@ -230,15 +241,22 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		total  int
 	)
 	for rows.Next() {
-		var s catalog.CardSummary
+		var (
+			s            catalog.CardSummary
+			variantsJSON string
+		)
 		if err := rows.Scan(
 			&s.ID, &s.ExternalID, &s.Name, &s.Number, &s.Rarity, &s.GameCode,
 			&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
 			&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
 			&s.Image.Small, &s.Image.Medium, &s.Image.Large,
+			&variantsJSON,
 			&total,
 		); err != nil {
 			return nil, 0, err
+		}
+		if err := json.Unmarshal([]byte(variantsJSON), &s.Variants); err != nil {
+			return nil, 0, fmt.Errorf("parsear variantes: %w", err)
 		}
 		result = append(result, s)
 	}

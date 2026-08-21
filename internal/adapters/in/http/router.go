@@ -87,13 +87,11 @@ func NewRouter(h Handlers) http.Handler {
 		r.Post("/cards/import", h.Pokemon.ImportCards)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
-			r.Post("/cards/import", h.Pokemon.ImportCard)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)
 			r.Delete("/cards/{id}", h.Pokemon.DeleteCard)
 		})
 		r.Route("/magic", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Magic.SyncExpansions)
-			r.Post("/cards/import", h.Magic.ImportCard)
 			r.Put("/cards/{id}", h.Magic.RefreshCard)
 			r.Delete("/cards/{id}", h.Magic.DeleteCard)
 		})

@@ -8,13 +8,12 @@ import (
 )
 
 type ImportCardUseCase struct {
-	search        *SearchScrydex
-	repo          out.CardRepository
-	expansionRepo out.ExpansionRepository
+	search *SearchScrydex
+	repo   out.CardRepository
 }
 
-func NewImportCardUseCase(search *SearchScrydex, repo out.CardRepository, expansionRepo out.ExpansionRepository) *ImportCardUseCase {
-	return &ImportCardUseCase{search: search, repo: repo, expansionRepo: expansionRepo}
+func NewImportCardUseCase(search *SearchScrydex, repo out.CardRepository) *ImportCardUseCase {
+	return &ImportCardUseCase{search: search, repo: repo}
 }
 
 // ImportBySearch persiste las cartas seleccionadas de una búsqueda previa.
@@ -51,10 +50,6 @@ func (uc *ImportCardUseCase) ImportBySearch(ctx context.Context, searchID string
 	return imported, nil
 }
 
-func (uc *ImportCardUseCase) ImportPokemon(ctx context.Context, name, expansionName, rarity string) ([]catalog.Card, error) {
-	return uc.importByGame(ctx, "pokemon", name, expansionName, rarity)
-}
-
 func (uc *ImportCardUseCase) DeletePokemon(ctx context.Context, id int64) error {
 	return uc.repo.DeleteCard(ctx, id)
 }
@@ -63,44 +58,12 @@ func (uc *ImportCardUseCase) RefreshPokemon(ctx context.Context, id int64) (*cat
 	return uc.refreshByGame(ctx, "pokemon", id)
 }
 
-func (uc *ImportCardUseCase) ImportMTG(ctx context.Context, name, expansionName, rarity string) ([]catalog.Card, error) {
-	return uc.importByGame(ctx, "mtg", name, expansionName, rarity)
-}
-
 func (uc *ImportCardUseCase) DeleteMTG(ctx context.Context, id int64) error {
 	return uc.repo.DeleteCard(ctx, id)
 }
 
 func (uc *ImportCardUseCase) RefreshMTG(ctx context.Context, id int64) (*catalog.Card, error) {
 	return uc.refreshByGame(ctx, "mtg", id)
-}
-
-func (uc *ImportCardUseCase) importByGame(ctx context.Context, gameCode, name, expansionName, rarity string) ([]catalog.Card, error) {
-	var expansionCode string
-	if expansionName != "" {
-		expansion, err := uc.expansionRepo.FindByName(ctx, gameCode, expansionName)
-		if err != nil {
-			return nil, fmt.Errorf("expansión %q no encontrada: asegúrate de haber sincronizado las expansiones primero", expansionName)
-		}
-		expansionCode = expansion.ExternalID
-	}
-
-	cards, err := uc.search.Search(ctx, out.SearchParams{
-		GameCode:      gameCode,
-		Name:          name,
-		ExpansionCode: expansionCode,
-		Rarity:        rarity,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("buscar en scrydex: %w", err)
-	}
-
-	for _, card := range cards.Cards {
-		if err := uc.repo.SyncCard(ctx, gameCode, card); err != nil {
-			return nil, fmt.Errorf("guardar carta %q: %w", card.Name, err)
-		}
-	}
-	return cards.Cards, nil
 }
 
 func (uc *ImportCardUseCase) refreshByGame(ctx context.Context, gameCode string, id int64) (*catalog.Card, error) {

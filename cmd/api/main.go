@@ -59,7 +59,7 @@ func main() {
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
-	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo, expansionRepo)
+	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)

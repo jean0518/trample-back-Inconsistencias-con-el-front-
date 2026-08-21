@@ -155,42 +155,6 @@ func (h *PokemonHandler) ListExpansions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, expansions)
 }
 
-// ImportCard importa cartas de Pokémon al catálogo local.
-//
-//	@Summary      Importar cartas Pokémon
-//	@Tags         admin
-//	@Accept       json
-//	@Produce      json
-//	@Param        body  body      object{name=string,expansion_name=string,rarity=string}  true  "Datos de la carta"
-//	@Success      200   {object}  object{imported=integer,cards=[]catalog.Card}
-//	@Failure      400   {object}  object{error=string}
-//	@Failure      500   {object}  object{error=string}
-//	@Router       /admin/pokemon/cards/import [post]
-func (h *PokemonHandler) ImportCard(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name          string `json:"name"`
-		ExpansionName string `json:"expansion_name"`
-		Rarity        string `json:"rarity"`
-	}
-	if err := Decode(r, &body); err != nil {
-		Error(w, http.StatusBadRequest, "body JSON inválido")
-		return
-	}
-	if body.Name == "" {
-		Error(w, http.StatusBadRequest, "name es requerido")
-		return
-	}
-	cards, err := h.importCard.ImportPokemon(r.Context(), body.Name, body.ExpansionName, body.Rarity)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	JSON(w, http.StatusOK, map[string]any{
-		"imported": len(cards),
-		"cards":    cards,
-	})
-}
-
 // ImportCards importa las cartas seleccionadas de una búsqueda previa.
 //
 //	@Summary      Importar cartas seleccionadas de una búsqueda

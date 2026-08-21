@@ -99,32 +99,6 @@ func (h *MagicHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, expansions)
 }
 
-// POST /admin/magic/cards/import
-func (h *MagicHandler) ImportCard(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name          string `json:"name"`
-		ExpansionName string `json:"expansion_name"`
-		Rarity        string `json:"rarity"`
-	}
-	if err := Decode(r, &body); err != nil {
-		Error(w, http.StatusBadRequest, "body JSON inválido")
-		return
-	}
-	if body.Name == "" {
-		Error(w, http.StatusBadRequest, "name es requerido")
-		return
-	}
-	cards, err := h.importCard.ImportMTG(r.Context(), body.Name, body.ExpansionName, body.Rarity)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	JSON(w, http.StatusOK, map[string]any{
-		"imported": len(cards),
-		"cards":    cards,
-	})
-}
-
 // DELETE /admin/magic/cards/{id}
 func (h *MagicHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

@@ -1,180 +1,129 @@
-# Guía: Importar cartas desde el frontend
+# Guía: Agregar cartas al catálogo (flujo único desde el inventario)
 
-Flujo de 4 pasos: elegir juego → elegir expansión → buscar carta → guardar en DB.
+> **Flujo oficial:** la única forma de agregar cartas al catálogo es desde
+> **Admin → Inventario → "Agregar cartas"**. El diálogo busca en Scrydex,
+> permite seleccionar varias cartas y las importa todas juntas a la DB.
 
 ---
 
 ## Paso 1 — Listar juegos
 
-Muestra al usuario los juegos disponibles para que elija uno.
-
-**Request**
 ```
 GET /games
 ```
 
-**Response**
 ```json
 [
   { "id": 1, "code": "pokemon", "name": "Pokémon" },
-  { "id": 2, "code": "mtg",     "name": "Magic: The Gathering" }
+  { "id": 2, "code": "mtg",     "name": "Magic: The Gathering" },
+  { "id": 3, "code": "riftbound", "name": "Riftbound" }
 ]
 ```
 
-Guardá el `id` y el `code` del juego seleccionado — los vas a usar en los pasos siguientes.
-
----
+Guardá `id` y `code` del juego elegido.
 
 ## Paso 2 — Listar expansiones del juego
 
-Con el `id` del juego elegido, traé sus expansiones para mostrarlas en un selector.
-
-**Request**
 ```
 GET /expansions?game_id={id}
 ```
 
-**Ejemplo**
-```
-GET /expansions?game_id=1
-```
+Guardá el `ExternalID` de la expansión elegida (es el `expansion_code` de Scrydex).
 
-**Response**
-```json
-[
-  {
-    "ID": 42,
-    "GameID": 1,
-    "ExternalID": "sv8",
-    "Name": "Surging Sparks",
-    "Code": "SSP",
-    "ReleasedAt": "2024-11-08"
-  },
-  ...
-]
-```
+> Si no aparecen expansiones, un admin debe sincronizarlas primero:
+> `POST /admin/pokemon/expansions/sync`, `POST /admin/magic/expansions/sync`.
 
-> Si omitís `game_id` devuelve todas las expansiones de todos los juegos.
+## Paso 3 — Buscar en Scrydex (5 filtros, todos server-side)
 
-Guardá el `ExternalID` de la expansión seleccionada — es el código que Scrydex usa para filtrar (`expansion_code`).
+Requiere **token de admin**.
 
----
-
-## Paso 3 — Buscar carta en Scrydex
-
-Con el juego y la expansión elegidos, buscá la carta por nombre.  
-Este endpoint requiere **token de admin**.
-
-**Request**
 ```
 POST /scrydex/{code}/cards
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-Reemplazá `{code}` con el `code` del juego (`pokemon`, `mtg`, `riftbound`).
-
-**Body**
-```json
-{
-  "name": "char",
-  "expansion_code": "sv8"
-}
-```
-
-| Campo            | Requerido | Descripción                                      |
-|------------------|-----------|--------------------------------------------------|
-| `name`           | Sí        | Nombre parcial — busca por prefijo (ej: "char")  |
-| `expansion_code` | No        | `ExternalID` de la expansión elegida en paso 2   |
-| `rarity`         | No        | Rareza exacta (ej: "Rare Holo")                  |
-| `type`           | No        | Tipo de carta (solo Pokémon, ej: "Fire")         |
+| Campo            | Requerido | Descripción                                        |
+|------------------|-----------|----------------------------------------------------|
+| `name`           | Sí        | Nombre parcial — busca por prefijo (ej: "char")    |
+| `expansion_code` | No        | `ExternalID` de la expansión (paso 2)              |
+| `rarity`         | No        | Rareza exacta (ej: "Rare Holo")                    |
+| `variants`       | No        | Array de variantes (ej: ["non-foil", "foil"])      |
+| `type`           | No        | Tipo de carta (ej: "Fire", "Creature")             |
 
 **Response**
+
 ```json
 {
   "search_id": "search_e0d18c57ac78df66",
   "total": 3,
-  "cards": [
-    {
-      "external_id": "sv8-54",
-      "name": "Charizard ex",
-      "rarity": "Double Rare",
-      "expansion": { "name": "Surging Sparks", "code": "SSP" },
-      "variants": [
-        {
-          "name": "holofoil",
-          "nm_price": {
-            "market_usd": 12.50,
-            "market_cop": 52000
-          }
-        }
-      ],
-      "images": [...]
-    }
-  ]
+  "cards": [ ... ]
 }
 ```
 
-Mostrá las cartas al usuario para que elija cuáles guardar.  
-Guardá el `search_id` y los `external_id` de las cartas seleccionadas.
+El `search_id` expira a los **15 minutos**.
 
----
+## Paso 4 — Importar TODAS las cartas seleccionadas
 
-## Paso 4 — Guardar cartas seleccionadas en la DB
+Con el `search_id` y los `external_id` de todas las cartas marcadas:
 
-Con el `search_id` del paso anterior y los `external_id` de las cartas elegidas, guardalas en la base de datos.  
-Este endpoint requiere **token de admin**.
-
-**Request**
 ```
 POST /admin/cards/import
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-**Body**
 ```json
 {
   "search_id": "search_e0d18c57ac78df66",
-  "external_ids": ["sv8-54", "sv8-55"]
+  "external_ids": ["sv8-54", "sv8-55", "sv8-199"]
 }
 ```
 
 **Response**
+
 ```json
-{
-  "imported": 2,
-  "cards": [...]
-}
+{ "imported": 3, "cards": [...] }
 ```
 
-> El `search_id` expira a los **15 minutos**. Si el usuario tarda más, hay que repetir el paso 3.
+Las cartas quedan guardadas en el catálogo (`GET /catalog/cards`) y son
+consumidas por la tienda pública.
 
 ---
 
 ## Resumen del flujo
 
 ```
-GET  /games
-  └─ id, code del juego seleccionado
+Inventario → "Agregar cartas"
+  ├─ GET /games                        → elegir juego
+  ├─ GET /expansions?game_id={id}      → elegir expansión
+  ├─ POST /scrydex/{code}/cards        → buscar por nombre + filtros
+  ├─ (selección múltiple en el diálogo)
+  └─ POST /admin/cards/import          → guarda todas las seleccionadas
 
-GET  /expansions?game_id={id}
-  └─ ExternalID de la expansión seleccionada
-
-POST /scrydex/{code}/cards          (requiere admin)
-  └─ search_id + lista de cartas
-
-POST /admin/cards/import             (requiere admin)
-  └─ cartas guardadas en DB
+GET /catalog/cards                     → catálogo consumido por la tienda
 ```
 
 ---
 
-## Endpoints de sincronización (admin)
+## Endpoints eliminados (legacy)
 
-Antes de que las expansiones aparezcan en el paso 2, un admin debe haberlas sincronizado al menos una vez:
+| Endpoint eliminado                  | Reemplazo                          |
+|-------------------------------------|------------------------------------|
+| `POST /admin/pokemon/cards/import`  | búsqueda + `POST /admin/cards/import` |
+| `POST /admin/magic/cards/import`    | búsqueda + `POST /admin/cards/import` |
+| `GET /cards` (no existía en backend)| `GET /catalog/cards`               |
 
-| Juego   | Endpoint                                  |
-|---------|-------------------------------------------|
-| Pokémon | `POST /admin/pokemon/expansions/sync`     |
-| Magic   | `POST /admin/magic/expansions/sync`       |
+## Catálogo DB
+
+```
+GET /catalog/cards?game_code=&expansion_id=&name=&rarity=&type=&page=&page_size=
+```
+
+Acepta los mismos parámetros de búsqueda (más paginación) y es público
+(lo consume la tienda y la vista admin "Catálogo DB").
+
+## Seguridad
+
+Todas las rutas `/scrydex/*` requieren **rol admin** (antes magic/riftbound
+estaban sin proteger).

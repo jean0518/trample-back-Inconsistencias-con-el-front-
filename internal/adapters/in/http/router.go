@@ -42,11 +42,11 @@ func NewRouter(h Handlers) http.Handler {
 		r.Post("/login", h.Auth.Login)
 	})
 
-	// Scrydex — consultas en vivo a la API externa
+	// Scrydex — consultas en vivo a la API externa (solo admin)
 	r.Route("/scrydex", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Route("/pokemon", func(r chi.Router) {
-			r.Use(h.AuthMiddleware.RequireAuth)
-			r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 			r.Post("/cards", h.Pokemon.Search)
 			r.Post("/cards/{id}", h.Pokemon.FetchOne)
 		})

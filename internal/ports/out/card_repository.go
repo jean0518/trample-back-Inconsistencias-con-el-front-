@@ -9,6 +9,8 @@ type ListCardsParams struct {
 	GameCode    string
 	ExpansionID int64
 	Name        string
+	Rarity      string
+	Type        string
 	Page        int
 	PageSize    int
 }

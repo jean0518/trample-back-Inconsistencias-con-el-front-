@@ -228,9 +228,15 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		WHERE ($1::text   = '' OR g.code          = $1)
 		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
 		  AND ($3::text   = '' OR c.name ILIKE '%' || $3 || '%')
+		  AND ($6::text   = '' OR c.rarity      = $6)
+		  AND (
+			$7::text = ''
+			OR EXISTS (SELECT 1 FROM pokemon_card_details pd WHERE pd.card_id = c.id AND $7::text = ANY(pd.types))
+			OR EXISTS (SELECT 1 FROM mtg_card_details md WHERE md.card_id = c.id AND md.type_line ILIKE '%' || $7 || '%')
+		  )
 		ORDER BY e.release_date DESC, c.id
 		LIMIT $4 OFFSET $5
-	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset)
+	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity, p.Type)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listar cartas: %w", err)
 	}

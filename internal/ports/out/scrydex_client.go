@@ -12,6 +12,7 @@ type SearchParams struct {
 	Rarity        string   `json:"rarity"`
 	Variants      []string `json:"variants"`
 	Type          string   `json:"type"`
+	Supertype     string   `json:"supertype"`
 }
 
 type ScrydexClient interface {

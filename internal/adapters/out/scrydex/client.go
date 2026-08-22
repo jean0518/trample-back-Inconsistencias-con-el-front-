@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 )
@@ -171,15 +172,37 @@ type scrydexMTGExp struct {
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
-	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type)
+	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type, p.Supertype)
+	cards, err := c.searchOnce(ctx, p.GameCode, q, p.Variants)
+	if err != nil {
+		return nil, err
+	}
+	// Reintento con el nombre reducido a letras y dígitos: cubre entradas
+	// cuyo signo de puntuación no existe en el nombre indexado (p. ej. un
+	// punto final en "pikachu."). Si la búsqueda conservada ya arrojó
+	// resultados (o la query alternativa es idéntica) no se vuelve a consultar.
+	if len(cards) == 0 {
+		fallback := buildQuery(p.GameCode, stripNameSymbols(p.Name), p.ExpansionCode, p.Rarity, p.Type, p.Supertype)
+		if fallback != q {
+			slog.Info("scrydex retry sin simbolos", slog.String("query", fallback))
+			cards, err = c.searchOnce(ctx, p.GameCode, fallback, p.Variants)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return cards, nil
+}
+
+func (c *Client) searchOnce(ctx context.Context, gameCode, q string, variants []string) ([]catalog.Card, error) {
 	endpoint := fmt.Sprintf(
 		"%s%s/cards?q=%s&include=prices,images,variants&page_size=20",
-		baseURL, cardsPath(p.GameCode), url.QueryEscape(q),
+		baseURL, cardsPath(gameCode), url.QueryEscape(q),
 	)
 
-	slog.Info("scrydex request", slog.String("url", endpoint), slog.Any("variant_filter", p.Variants))
+	slog.Info("scrydex request", slog.String("url", endpoint), slog.Any("variant_filter", variants))
 
-	if p.GameCode == "mtg" {
+	if gameCode == "mtg" {
 		var envelope scrydexMTGEnvelope
 		if err := c.get(ctx, endpoint, &envelope); err != nil {
 			return nil, err
@@ -187,7 +210,7 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 		cards := make([]catalog.Card, 0, len(envelope.Data))
 		for _, raw := range envelope.Data {
 			card := toMTGCard(raw)
-			card.Variants = filterVariants(card.Variants, p.Variants)
+			card.Variants = filterVariants(card.Variants, variants)
 			cards = append(cards, card)
 		}
 		return cards, nil
@@ -200,7 +223,7 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 	cards := make([]catalog.Card, 0, len(envelope.Data))
 	for _, raw := range envelope.Data {
 		card := toCard(raw)
-		card.Variants = filterVariants(card.Variants, p.Variants)
+		card.Variants = filterVariants(card.Variants, variants)
 		cards = append(cards, card)
 	}
 	return cards, nil
@@ -455,10 +478,10 @@ func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
+func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype string) string {
 	var parts []string
-	if name != "" {
-		parts = append(parts, "name:"+quote(name)+"*")
+	if clause := buildNameClause(name); clause != "" {
+		parts = append(parts, clause)
 	}
 	if expansionCode != "" {
 		parts = append(parts, "expansion.id:"+quote(expansionCode))
@@ -468,6 +491,10 @@ func buildQuery(gameCode, name, expansionCode, rarity, cardType string) string {
 	}
 	if cardType != "" {
 		parts = append(parts, "types:"+quote(cardType))
+	}
+	// Supertipo (solo Pokémon): Pokémon, Trainer o Energy.
+	if supertype != "" && gameCode == "pokemon" {
+		parts = append(parts, "supertype:"+`"`+supertype+`"`)
 	}
 	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
 	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
@@ -488,6 +515,91 @@ func quote(v string) string {
 		return `"` + v + `"`
 	}
 	return v
+}
+
+// buildNameClause arma el filtro de nombre para la query de Scrydex.
+//   - Un solo término usa wildcard de prefijo:  name:pikachu*
+//   - Varias palabras se buscan como frase exacta:  name:"rare candy"
+//
+// La puntuación que forma parte del nombre se conserva (véase
+// sanitizeNameTerm). Un comodín después de las comillas (name:"..."*) no es
+// sintaxis válida para el parser de Scrydex y responde HTTP 400.
+func buildNameClause(raw string) string {
+	tokens := fieldsWithLetters(sanitizeNameTerm(raw))
+	if len(tokens) == 0 {
+		return ""
+	}
+	if len(tokens) == 1 {
+		return "name:" + tokens[0] + "*"
+	}
+	return `name:"` + strings.Join(tokens, " ") + `"`
+}
+
+// sanitizeNameTerm conserva los caracteres que el índice de Scrydex mantiene
+// dentro de los nombres —apóstrofes, guiones internos, puntos y "&" forman
+// parte de términos como "Rocket's", "Charizard-GX", "Mr. Mime" o
+// "Pikachu & Zekrom"— y elimina únicamente los que tienen significado
+// sintáctico para su parser de queries (comillas, dos puntos, comodines,
+// paréntesis, etc.), reemplazándolos por espacios.
+//
+// El guion solo se conserva entre caracteres alfanuméricos para no generar
+// el operador de exclusión "-term" de Lucene al inicio de un término.
+func sanitizeNameTerm(v string) string {
+	var b strings.Builder
+	b.Grow(len(v))
+	prevAlnum := false
+	for _, r := range v {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevAlnum = true
+		case r == '\'', r == '‘', r == '’', r == 'ʼ':
+			b.WriteRune('\'')
+			prevAlnum = false
+		case r == '-', r == '.', r == '&':
+			if r != '-' || prevAlnum {
+				b.WriteRune(r)
+			}
+			prevAlnum = false
+		default:
+			b.WriteRune(' ')
+			prevAlnum = false
+		}
+	}
+	return b.String()
+}
+
+// stripNameSymbols reduce el nombre a letras y dígitos. Se usa como segundo
+// intento cuando la búsqueda conservando puntuación no arrojó resultados
+// (entradas con símbolos que no forman parte del nombre real, p. ej. un
+// punto final en "pikachu.").
+func stripNameSymbols(v string) string {
+	var b strings.Builder
+	b.Grow(len(v))
+	for _, r := range v {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune(' ')
+		}
+	}
+	return b.String()
+}
+
+// fieldsWithLetters divide por espacios y descarta tokens sin ninguna letra
+// o dígito ("...", "-", "'"), salvo "&", que sí aparece como término en
+// nombres indexados como "Pikachu & Zekrom".
+func fieldsWithLetters(s string) []string {
+	fields := strings.Fields(s)
+	tokens := make([]string, 0, len(fields))
+	for _, t := range fields {
+		if t == "&" || strings.ContainsFunc(t, func(r rune) bool {
+			return unicode.IsLetter(r) || unicode.IsDigit(r)
+		}) {
+			tokens = append(tokens, t)
+		}
+	}
+	return tokens
 }
 
 // --- HTTP helper ---

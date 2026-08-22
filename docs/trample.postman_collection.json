@@ -1,0 +1,366 @@
+{
+  "info": {
+    "name": "Trample API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "token",    "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"first_name\": \"Juan\",\n  \"last_name\": \"Perez\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "item": [
+        {
+          "name": "Listar juegos",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/games"
+          }
+        },
+        {
+          "name": "Listar expansiones (todas)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/expansions"
+          }
+        },
+        {
+          "name": "Listar expansiones por juego",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/expansions?game_id=1",
+              "query": [{ "key": "game_id", "value": "1" }]
+            }
+          }
+        },
+        {
+          "name": "Listar expansiones Pokémon",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/catalog/pokemon/expansions"
+          }
+        },
+        {
+          "name": "Listar expansiones Magic",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/catalog/magic/expansions"
+          }
+        },
+        {
+          "name": "Listar cartas de la DB",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/catalog/cards?game_code=pokemon&expansion_id=&name=&page=1&page_size=20",
+              "query": [
+                { "key": "game_code",    "value": "pokemon" },
+                { "key": "expansion_id", "value": "",       "disabled": true },
+                { "key": "name",         "value": "",       "disabled": true },
+                { "key": "page",         "value": "1" },
+                { "key": "page_size",    "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scrydex (admin)",
+      "item": [
+        {
+          "name": "Pokémon — Buscar cartas",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/scrydex/pokemon/cards",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"char\",\n  \"expansion_code\": \"sv8\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Pokémon — Obtener carta por ID externo",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/scrydex/pokemon/cards/:id",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variants\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/scrydex/pokemon/cards/:id",
+              "variable": [{ "key": "id", "value": "sv8-54" }]
+            }
+          }
+        },
+        {
+          "name": "Magic — Buscar cartas",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/scrydex/magic/cards",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"lightning\",\n  \"expansion_code\": \"\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Magic — Obtener carta por ID externo",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/scrydex/magic/cards/:id",
+              "variable": [{ "key": "id", "value": "abc-123" }]
+            },
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variants\": []\n}"
+            }
+          }
+        },
+        {
+          "name": "Riftbound — Buscar cartas",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/scrydex/riftbound/cards",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"fire\",\n  \"expansion_code\": \"\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Riftbound — Obtener carta por ID externo",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/scrydex/riftbound/cards/:id",
+              "variable": [{ "key": "id", "value": "rb-001" }]
+            },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variants\": []\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Importar cartas seleccionadas (desde búsqueda)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/cards/import",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"search_id\": \"search_e0d18c57ac78df66\",\n  \"external_ids\": [\"sv8-54\", \"sv8-55\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Pokémon — Sincronizar expansiones",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/pokemon/expansions/sync",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Pokémon — Importar carta por nombre",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/pokemon/cards/import",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Charizard\",\n  \"expansion_name\": \"Surging Sparks\",\n  \"rarity\": \"\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Pokémon — Refrescar carta",
+          "request": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{base_url}}/admin/pokemon/cards/:id",
+              "variable": [{ "key": "id", "value": "1" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Pokémon — Eliminar carta",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/admin/pokemon/cards/:id",
+              "variable": [{ "key": "id", "value": "1" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Magic — Sincronizar expansiones",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/magic/expansions/sync",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Magic — Importar carta por nombre",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/admin/magic/cards/import",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Lightning Bolt\",\n  \"expansion_name\": \"\",\n  \"rarity\": \"\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Magic — Refrescar carta",
+          "request": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{base_url}}/admin/magic/cards/:id",
+              "variable": [{ "key": "id", "value": "1" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Magic — Eliminar carta",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/admin/magic/cards/:id",
+              "variable": [{ "key": "id", "value": "1" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Listings",
+      "item": [
+        {
+          "name": "Listar mis listings",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/listings?limit=50&offset=0",
+              "query": [
+                { "key": "limit",  "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        },
+        {
+          "name": "Crear listing",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/listings",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variant_id\": 1,\n  \"quantity\": 2,\n  \"price_usd\": 12.50,\n  \"language\": \"Inglés\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Eliminar listing",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/listings/:id",
+              "variable": [{ "key": "id", "value": "1" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -60,14 +60,15 @@ func (uc *LoginUseCase) Execute(ctx context.Context, in LoginInput) (LoginResult
 func (uc *LoginUseCase) IssueToken(_ context.Context, user auth.User) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":   strconv.FormatInt(user.ID, 10),
-		"email": user.Email,
-		"name":  user.FirstName + " " + user.LastName,
-		"role":  user.Role,
-		"iss":   "trample-api",
-		"aud":   "trample-web",
-		"iat":   now.Unix(),
-		"exp":   now.Add(24 * time.Hour).Unix(),
+		"sub":        strconv.FormatInt(user.ID, 10),
+		"email":      user.Email,
+		"first_name": user.FirstName,
+		"last_name":  user.LastName,
+		"role":       user.Role,
+		"iss":        "trample-api",
+		"aud":        "trample-web",
+		"iat":        now.Unix(),
+		"exp":        now.Add(24 * time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(uc.jwtSecret)

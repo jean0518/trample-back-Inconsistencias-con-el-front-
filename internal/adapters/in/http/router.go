@@ -20,12 +20,34 @@ type Handlers struct {
 	Riftbound      *RiftboundHandler
 	Listings       *ListingHandler
 	AuthMiddleware *AuthMiddleware
+	FrontendURL    string
+}
+
+func corsMiddleware(allowedOrigin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin == allowedOrigin {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func NewRouter(h Handlers) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMiddleware(h.FrontendURL))
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -40,6 +62,8 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(httprate.LimitByIP(10, time.Minute))
 		r.Post("/register", h.Auth.Register)
 		r.Post("/login", h.Auth.Login)
+		r.Post("/logout", h.Auth.Logout)
+		r.With(h.AuthMiddleware.RequireAuth).Get("/me", h.Auth.Me)
 	})
 
 	// Scrydex — consultas en vivo a la API externa

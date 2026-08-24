@@ -66,15 +66,17 @@ func main() {
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
 
 	// Router
+	secureCookie := cfg.Env == "production"
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
-		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
+		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, secureCookie),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),
 		AuthMiddleware: authMiddleware,
+		FrontendURL:    cfg.FrontendURL,
 	})
 
 	srv := &http.Server{

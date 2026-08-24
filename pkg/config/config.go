@@ -13,6 +13,8 @@ type Config struct {
 	ScrydexAPIKey string
 	ScrydexTeamID string
 	JWTSecret     string
+	FrontendURL   string
+	Env           string
 }
 
 func Load() (*Config, error) {
@@ -41,6 +43,8 @@ func Load() (*Config, error) {
 		ScrydexAPIKey: scrydexKey,
 		ScrydexTeamID: scrydexTeam,
 		JWTSecret:     jwtSecret,
+		FrontendURL:   envOr("FRONTEND_URL", "http://localhost:5173"),
+		Env:           envOr("ENV", "development"),
 	}, nil
 }
 

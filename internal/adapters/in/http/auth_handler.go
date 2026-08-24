@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
+
 	appAuth "trample-back/internal/application/auth"
 	"trample-back/internal/domain/auth"
 )
 
 type AuthHandler struct {
-	register *appAuth.RegisterUseCase
-	login    *appAuth.LoginUseCase
+	register    *appAuth.RegisterUseCase
+	login       *appAuth.LoginUseCase
+	secureCookie bool
 }
 
 type authUserResponse struct {
@@ -31,22 +34,32 @@ func newAuthUserResponse(u auth.User) authUserResponse {
 	}
 }
 
-func NewAuthHandler(register *appAuth.RegisterUseCase, login *appAuth.LoginUseCase) *AuthHandler {
-	return &AuthHandler{register: register, login: login}
+func NewAuthHandler(register *appAuth.RegisterUseCase, login *appAuth.LoginUseCase, secureCookie bool) *AuthHandler {
+	return &AuthHandler{register: register, login: login, secureCookie: secureCookie}
 }
 
-// Register crea una nueva cuenta de usuario.
-//
-//	@Summary      Registrar usuario
-//	@Tags         auth
-//	@Accept       json
-//	@Produce      json
-//
-// @Param        body  body      object{first_name=string,last_name=string,email=string,password=string}  true  "Datos del nuevo usuario"
-// @Success      201   {object}  object{token=string,user=object{id=integer,first_name=string,last_name=string,email=string,role=string}}
-// @Failure      409   {object}  object{error=string}  "Email ya registrado"
-// @Failure      422   {object}  object{error=string}  "Datos de validación inválidos"
-// @Router       /auth/register [post]
+func (h *AuthHandler) setAuthCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     AuthCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int((24 * time.Hour).Seconds()),
+	})
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     AuthCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		FirstName string `json:"first_name"`
@@ -85,23 +98,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.setAuthCookie(w, token)
 	JSON(w, http.StatusCreated, map[string]any{
-		"token": token,
-		"user":  newAuthUserResponse(user),
+		"user": newAuthUserResponse(user),
 	})
 }
 
-// Login autentica al usuario y devuelve un JWT.
-//
-//	@Summary      Iniciar sesión
-//	@Tags         auth
-//	@Accept       json
-//	@Produce      json
-//	@Param        body  body      object{email=string,password=string}  true  "Credenciales"
-//
-// @Success      200   {object}  object{token=string,user=object{id=integer,first_name=string,last_name=string,email=string,role=string}}
-// @Failure      401   {object}  object{error=string}  "Credenciales inválidas"
-// @Router       /auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
@@ -121,8 +123,30 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.setAuthCookie(w, result.Token)
 	JSON(w, http.StatusOK, map[string]any{
-		"token": result.Token,
-		"user":  newAuthUserResponse(result.User),
+		"user": newAuthUserResponse(result.User),
 	})
+}
+
+// Me devuelve los datos del usuario autenticado (leyendo del contexto del JWT en cookie).
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	JSON(w, http.StatusOK, authUserResponse{
+		ID:        authUser.ID,
+		FirstName: authUser.FirstName,
+		LastName:  authUser.LastName,
+		Email:     authUser.Email,
+		Role:      authUser.Role,
+	})
+}
+
+// Logout borra la cookie de sesión.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	clearAuthCookie(w)
+	w.WriteHeader(http.StatusNoContent)
 }

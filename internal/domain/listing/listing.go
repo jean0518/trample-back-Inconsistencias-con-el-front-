@@ -1,6 +1,12 @@
 package listing
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrNotFound indica que el listing no existe o no pertenece al vendedor.
+var ErrNotFound = errors.New("listing no encontrado")
 
 type Listing struct {
 	ID        int64
@@ -8,13 +14,18 @@ type Listing struct {
 	VariantID int64
 	GameID    int64
 	GameName  string
-	Quantity  int
-	PriceUSD  float64
-	PriceCOP  float64
-	Status    string
-	Language  string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// Datos de la carta para el inventario legible (JOIN con cards/expansions).
+	CardName      string
+	CardImage     string
+	ExpansionName string
+	VariantName   string
+	Quantity      int
+	PriceUSD      float64
+	PriceCOP      float64
+	Status        string
+	Language      string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type CreateInput struct {
@@ -22,5 +33,16 @@ type CreateInput struct {
 	VariantID int64
 	Quantity  int
 	PriceUSD  float64
-	Language  string
+	// PriceCOP se calcula con la TRM del día antes de persistir.
+	PriceCOP float64
+	Language string
+}
+
+// UpdateStockInput modifica la cantidad de un listing. La regla de estado es
+// automática: quantity 0 ⇒ 'inactive'; volver a subir stock ⇒ 'active'
+// (el estado 'sold' nunca se cambia automáticamente).
+type UpdateStockInput struct {
+	ID       int64
+	SellerID int64
+	Quantity int
 }

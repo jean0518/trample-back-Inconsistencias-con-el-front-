@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -11,29 +12,35 @@ import (
 type ListingHandler struct {
 	create *appListing.CreateListingUseCase
 	list   *appListing.ListListingsUseCase
+	update *appListing.UpdateStockUseCase
 	delete *appListing.DeleteListingUseCase
 }
 
 func NewListingHandler(
 	create *appListing.CreateListingUseCase,
 	list *appListing.ListListingsUseCase,
+	update *appListing.UpdateStockUseCase,
 	delete *appListing.DeleteListingUseCase,
 ) *ListingHandler {
-	return &ListingHandler{create: create, list: list, delete: delete}
+	return &ListingHandler{create: create, list: list, update: update, delete: delete}
 }
 
 type listingResponse struct {
-	ID        int64   `json:"ID"`
-	SellerID  int64   `json:"SellerID"`
-	VariantID int64   `json:"VariantID"`
-	GameName  string  `json:"GameName"`
-	Quantity  int     `json:"Quantity"`
-	PriceUSD  float64 `json:"PriceUSD"`
-	PriceCOP  float64 `json:"PriceCOP"`
-	Status    string  `json:"Status"`
-	Language  string  `json:"Language"`
-	CreatedAt string  `json:"CreatedAt"`
-	UpdatedAt string  `json:"UpdatedAt"`
+	ID            int64   `json:"ID"`
+	SellerID      int64   `json:"SellerID"`
+	VariantID     int64   `json:"VariantID"`
+	GameName      string  `json:"GameName"`
+	CardName      string  `json:"CardName"`
+	CardImage     string  `json:"CardImage"`
+	ExpansionName string  `json:"ExpansionName"`
+	VariantName   string  `json:"VariantName"`
+	Quantity      int     `json:"Quantity"`
+	PriceUSD      float64 `json:"PriceUSD"`
+	PriceCOP      float64 `json:"PriceCOP"`
+	Status        string  `json:"Status"`
+	Language      string  `json:"Language"`
+	CreatedAt     string  `json:"CreatedAt"`
+	UpdatedAt     string  `json:"UpdatedAt"`
 }
 
 type createListingRequest struct {
@@ -45,17 +52,21 @@ type createListingRequest struct {
 
 func newListingResponse(l listing.Listing) listingResponse {
 	return listingResponse{
-		ID:        l.ID,
-		SellerID:  l.SellerID,
-		VariantID: l.VariantID,
-		GameName:  l.GameName,
-		Quantity:  l.Quantity,
-		PriceUSD:  l.PriceUSD,
-		PriceCOP:  l.PriceCOP,
-		Status:    l.Status,
-		Language:  l.Language,
-		CreatedAt: l.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		UpdatedAt: l.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		ID:            l.ID,
+		SellerID:      l.SellerID,
+		VariantID:     l.VariantID,
+		GameName:      l.GameName,
+		CardName:      l.CardName,
+		CardImage:     l.CardImage,
+		ExpansionName: l.ExpansionName,
+		VariantName:   l.VariantName,
+		Quantity:      l.Quantity,
+		PriceUSD:      l.PriceUSD,
+		PriceCOP:      l.PriceCOP,
+		Status:        l.Status,
+		Language:      l.Language,
+		CreatedAt:     l.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:     l.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -140,6 +151,61 @@ func (h *ListingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSON(w, http.StatusCreated, newListingResponse(l))
+}
+
+// UpdateStock ajusta la cantidad de un listing del vendedor autenticado.
+// Si la cantidad queda en 0 el listing pasa a 'inactive'; al subir stock
+// vuelve a 'active'.
+//
+//	@Summary      Actualizar cantidad de un listing
+//	@Tags         listings
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path  int                true  "ID del listing"
+//	@Param        body  body  object{quantity=int}  true  "Nueva cantidad (0 = inactivo)"
+//	@Success      200   {object}  listingResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Router       /listings/{id} [patch]
+func (h *ListingHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+
+	var body struct {
+		Quantity *int `json:"quantity"`
+	}
+	if err := Decode(r, &body); err != nil || body.Quantity == nil {
+		Error(w, http.StatusBadRequest, "quantity es requerido")
+		return
+	}
+
+	l, err := h.update.Execute(r.Context(), listing.UpdateStockInput{
+		ID:       id,
+		SellerID: user.ID,
+		Quantity: *body.Quantity,
+	})
+	if err != nil {
+		if errors.Is(err, listing.ErrNotFound) {
+			Error(w, http.StatusNotFound, err.Error())
+			return
+		}
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	JSON(w, http.StatusOK, newListingResponse(l))
 }
 
 // Delete elimina un listing del usuario autenticado.

@@ -77,6 +77,7 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Get("/", h.Listings.List)
 		r.Post("/", h.Listings.Create)
+		r.Patch("/{id}", h.Listings.UpdateStock)
 		r.Delete("/{id}", h.Listings.Delete)
 	})
 
@@ -85,6 +86,7 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Post("/cards/import", h.Pokemon.ImportCards)
+		r.Post("/cards/import-listing", h.Pokemon.ImportToListing)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)

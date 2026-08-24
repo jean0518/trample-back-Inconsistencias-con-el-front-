@@ -221,6 +221,12 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				WHERE cv.card_id = c.id),
 				'[]'
 			)::text,
+			COALESCE((
+				SELECT SUM(il.quantity)
+				FROM inventory_listings il
+				JOIN card_variants lcv ON lcv.id = il.variant_id
+				WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
+			), 0)::int AS stock,
 			COUNT(*) OVER() AS total
 		FROM cards c
 		JOIN games      g ON g.id = c.game_id
@@ -233,6 +239,14 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			$7::text = ''
 			OR EXISTS (SELECT 1 FROM pokemon_card_details pd WHERE pd.card_id = c.id AND $7::text = ANY(pd.types))
 			OR EXISTS (SELECT 1 FROM mtg_card_details md WHERE md.card_id = c.id AND md.type_line ILIKE '%' || $7 || '%')
+		  )
+		  -- El catálogo público refleja el inventario: solo cartas con
+		  -- al menos un listing activo y con stock.
+		  AND EXISTS (
+			SELECT 1
+			FROM inventory_listings il
+			JOIN card_variants lcv ON lcv.id = il.variant_id
+			WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
 		  )
 		ORDER BY e.release_date DESC, c.id
 		LIMIT $4 OFFSET $5
@@ -257,6 +271,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
 			&s.Image.Small, &s.Image.Medium, &s.Image.Large,
 			&variantsJSON,
+			&s.Stock,
 			&total,
 		); err != nil {
 			return nil, 0, err
@@ -270,6 +285,21 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		return nil, 0, err
 	}
 	return result, total, nil
+}
+
+func (r *CardRepository) GetVariantID(ctx context.Context, gameCode, externalID, variantName string) (int64, error) {
+	var variantID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT cv.id
+		FROM card_variants cv
+		JOIN cards c ON c.id = cv.card_id
+		JOIN games g ON g.id = c.game_id
+		WHERE g.code = $1 AND c.external_id = $2 AND cv.variant_name = $3
+	`, gameCode, externalID, variantName).Scan(&variantID)
+	if err != nil {
+		return 0, fmt.Errorf("variante %q de carta %q (%s): %w", variantName, externalID, gameCode, err)
+	}
+	return variantID, nil
 }
 
 func (r *CardRepository) GetExternalID(ctx context.Context, id int64) (string, error) {

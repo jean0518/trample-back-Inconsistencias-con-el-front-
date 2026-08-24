@@ -25,6 +25,7 @@ import (
 	"trample-back/internal/adapters/out/trm"
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
+	appListing "trample-back/internal/application/listing"
 	"trample-back/pkg/config"
 	"trample-back/pkg/db"
 	"trample-back/pkg/logger"
@@ -55,15 +56,21 @@ func main() {
 	cardRepo := postgres.NewCardRepository(pool)
 	userRepo := postgres.NewUserRepository(pool)
 	gameRepo := postgres.NewGameRepository(pool)
+	listingRepo := postgres.NewListingRepository(pool)
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
+	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, trmClient)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
+	createListingUC := appListing.NewCreateListingUseCase(listingRepo, trmClient)
+	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
+	updateStockUC := appListing.NewUpdateStockUseCase(listingRepo)
+	deleteListingUC := appListing.NewDeleteListingUseCase(listingRepo)
 
 	// Router
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
@@ -71,9 +78,10 @@ func main() {
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
-		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC),
+		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),
+		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		AuthMiddleware: authMiddleware,
 	})
 

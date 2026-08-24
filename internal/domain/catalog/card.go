@@ -86,6 +86,9 @@ type CardSummary struct {
 	Expansion  ExpansionBrief `json:"expansion"`
 	Image      ImageBrief     `json:"image"`
 	Variants   []VariantBrief `json:"variants"`
+	// Stock agregado de listings activos con cantidad > 0. El catálogo
+	// público solo muestra cartas con stock disponible.
+	Stock int `json:"stock"`
 }
 
 type VariantBrief struct {

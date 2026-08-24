@@ -11,17 +11,24 @@ import (
 )
 
 type PokemonHandler struct {
-	search     *appCatalog.SearchScrydex
-	expansions *appCatalog.SyncExpansionsUseCase
-	importCard *appCatalog.ImportCardUseCase
+	search        *appCatalog.SearchScrydex
+	expansions    *appCatalog.SyncExpansionsUseCase
+	importCard    *appCatalog.ImportCardUseCase
+	importListing *appCatalog.ImportListingUseCase
 }
 
 func NewPokemonHandler(
 	search *appCatalog.SearchScrydex,
 	expansions *appCatalog.SyncExpansionsUseCase,
 	importCard *appCatalog.ImportCardUseCase,
+	importListing *appCatalog.ImportListingUseCase,
 ) *PokemonHandler {
-	return &PokemonHandler{search: search, expansions: expansions, importCard: importCard}
+	return &PokemonHandler{
+		search:        search,
+		expansions:    expansions,
+		importCard:    importCard,
+		importListing: importListing,
+	}
 }
 
 // Search busca cartas de Pokémon en Scrydex.
@@ -157,27 +164,36 @@ func (h *PokemonHandler) ListExpansions(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, expansions)
 }
 
-// ImportCards importa las cartas seleccionadas de una búsqueda previa.
+// ImportCards importa las cartas seleccionadas de una o varias búsquedas previas.
 //
-//	@Summary      Importar cartas seleccionadas de una búsqueda
+//	@Summary      Importar cartas seleccionadas de búsquedas
 //	@Tags         admin
 //	@Accept       json
 //	@Produce      json
-//	@Param        body  body      object{search_id=string,external_ids=[]string}  true  "search_id devuelto por la búsqueda + IDs de las cartas elegidas"
+//	@Param        body  body      object{groups=[]object{search_id=string,external_ids=[]string}}  true  "Grupos por búsqueda: search_id devuelto + IDs elegidos"
 //	@Success      200   {object}  object{imported=integer,cards=[]catalog.Card}
 //	@Failure      400   {object}  object{error=string}
 //	@Failure      500   {object}  object{error=string}
 //	@Router       /admin/cards/import [post]
 func (h *PokemonHandler) ImportCards(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		SearchID    string   `json:"search_id"`
-		ExternalIDs []string `json:"external_ids"`
+		SearchID    string                   `json:"search_id"`
+		ExternalIDs []string                 `json:"external_ids"`
+		Groups      []appCatalog.ImportGroup `json:"groups"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	cards, err := h.importCard.ImportBySearch(r.Context(), body.SearchID, body.ExternalIDs)
+
+	// Compatibilidad: si viene el formato viejo de una sola búsqueda se
+	// normaliza a un grupo único.
+	groups := body.Groups
+	if len(groups) == 0 && body.SearchID != "" {
+		groups = []appCatalog.ImportGroup{{SearchID: body.SearchID, ExternalIDs: body.ExternalIDs}}
+	}
+
+	cards, err := h.importCard.ImportByGroups(r.Context(), groups)
 	if err != nil {
 		Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -185,5 +201,42 @@ func (h *PokemonHandler) ImportCards(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{
 		"imported": len(cards),
 		"cards":    cards,
+	})
+}
+
+// ImportToListing importa las cartas seleccionadas al catálogo y crea sus
+// listings (inventario) con la cantidad y precio indicados por el admin.
+//
+//	@Summary      Importar cartas y publicarlas al inventario
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{groups=[]object{search_id=string,items=[]object{external_id=string,quantity=integer,price_usd=number,language=string}}}  true  "Grupos por búsqueda con los datos de publicación"
+//	@Success      200   {object}  object{imported=integer,listings=[]appCatalog.ImportedListing}
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /admin/cards/import-listing [post]
+func (h *PokemonHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var body struct {
+		Groups []appCatalog.ImportListingGroup `json:"groups"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+
+	listings, err := h.importListing.Execute(r.Context(), user.ID, body.Groups)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{
+		"imported": len(listings),
+		"listings": listings,
 	})
 }

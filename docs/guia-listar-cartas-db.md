@@ -1,6 +1,11 @@
-# Guía: Listar cartas desde la DB
+# Guía: Catálogo público (`GET /catalog/cards`)
 
-Endpoint único con filtros opcionales y paginación.
+> **Importante:** desde la Fase 4 el catálogo se alimenta del **inventario**.
+> Solo aparecen cartas con al menos un listing `active` con `quantity > 0`.
+> La respuesta incluye el `stock` agregado por carta. La antigua vista admin
+> "Catálogo DB" fue eliminada; este endpoint es el que consume la tienda.
+
+Endpoint único con filtros opcionales y paginación. No requiere autenticación.
 
 ---
 
@@ -9,8 +14,6 @@ Endpoint único con filtros opcionales y paginación.
 ```
 GET /catalog/cards
 ```
-
-No requiere autenticación.
 
 ---
 
@@ -21,6 +24,8 @@ No requiere autenticación.
 | `game_code`    | string | No        | Filtra por juego: `pokemon`, `mtg`, `riftbound`  |
 | `expansion_id` | int    | No        | ID interno de la expansión (viene de `/expansions`) |
 | `name`         | string | No        | Búsqueda parcial por nombre (ej: `"char"`)       |
+| `rarity`       | string | No        | Rareza exacta (ej: `"Double Rare"`)              |
+| `type`         | string | No        | Tipo de carta (ej: `"Fire"`)                     |
 | `page`         | int    | No        | Número de página, default `1`                    |
 | `page_size`    | int    | No        | Resultados por página, default `20`, max `100`   |
 
@@ -28,7 +33,7 @@ No requiere autenticación.
 
 ## Ejemplos de uso
 
-**Todas las cartas (primera página)**
+**Todas las cartas con stock (primera página)**
 ```
 GET /catalog/cards
 ```
@@ -43,9 +48,9 @@ GET /catalog/cards?game_code=pokemon
 GET /catalog/cards?game_code=pokemon&expansion_id=42
 ```
 
-**Buscar por nombre dentro de una expansión**
+**Buscar por nombre y rareza dentro de una expansión**
 ```
-GET /catalog/cards?game_code=pokemon&expansion_id=42&name=char
+GET /catalog/cards?game_code=pokemon&expansion_id=42&name=char&rarity=Double%20Rare
 ```
 
 **Paginar**
@@ -81,7 +86,11 @@ GET /catalog/cards?game_code=pokemon&page=2&page_size=50
         "small": "https://...",
         "medium": "https://...",
         "large": "https://..."
-      }
+      },
+      "variants": [
+        { "name": "Normal", "price_usd": 1.5, "price_cop": 6000 }
+      ],
+      "stock": 8
     }
   ]
 }
@@ -92,10 +101,15 @@ GET /catalog/cards?game_code=pokemon&page=2&page_size=50
 | `total`            | Total de cartas que coinciden con los filtros            |
 | `page` / `page_size` | Página actual y tamaño de página usados               |
 | `cards`            | Array de cartas (vacío `[]` si no hay resultados)        |
-| `id`               | ID interno de la carta en la DB (usalo para delete/refresh) |
+| `id`               | ID interno de la carta en la DB                          |
 | `external_id`      | ID en Scrydex                                            |
 | `expansion.id`     | Usalo como `expansion_id` en futuras consultas filtradas |
-| `image`            | Primera imagen de la carta; puede tener `small/medium/large` vacíos si no fue importada con imágenes |
+| `variants`         | Variantes publicadas con precio USD y COP                |
+| `stock`            | Suma de cantidades de listings activos de la carta       |
+
+> Una carta sin listings activos **no aparece** en la respuesta. Al llegar el
+> stock a 0 (vía `PATCH /listings/{id}`) desaparece del catálogo hasta que
+> vuelva a haber inventario.
 
 ---
 

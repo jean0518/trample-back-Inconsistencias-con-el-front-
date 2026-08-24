@@ -1,5 +1,10 @@
 # Plan de acción: Flujo importación → inventario → catálogo
 
+> ⚠️ **DOCUMENTO ARCHIVADO — PLAN COMPLETADO.** Las 4 fases se implementaron y
+> verificaron (agosto 2026). Se conserva como registro histórico; el flujo
+> vigente está documentado en `docs/guia-importar-cartas.md` y
+> `docs/guia-listar-cartas-db.md`.
+
 > Alcance: cambios en `trample-back` (Go) y `Ecommerce-TrampleStore` (React).
 > Rama de trabajo: `feature/allgame` en ambos repositorios.
 
@@ -91,7 +96,7 @@ Ejemplo: busco "team rocket petrel" → la selecciono → indico cantidad 5, idi
 ## FASE 3 — Stock 0 ⇒ inactivo + gestión real de cantidades ✅
 
 ### Back (trample-back)
-- [x] Migración `docs/migration_002_listing_stock_cero.sql`: `quantity >= 0`.
+- [x] Migración `migrations/migration_002_listing_stock_cero.sql`: `quantity >= 0`.
 - [x] `PATCH /listings/{id}` (dueño del listing): actualizar `quantity`.
       Regla automática en SQL (atómica): `quantity == 0 → status 'inactive'`;
       `quantity > 0 → status 'active'` (si estaba inactive). Nunca tocar `sold`.
@@ -141,8 +146,8 @@ Aplicar en orden (todas idempotentes). Ya existe `cmd/migrate`, un ejecutor
 que lee `DATABASE_URL` del `.env`:
 
 ```bash
-go run ./cmd/migrate docs/migration_002_listing_stock_cero.sql
-go run ./cmd/migrate docs/migration_003_listing_language.sql
+go run ./cmd/migrate migrations/migration_002_listing_stock_cero.sql
+go run ./cmd/migrate migrations/migration_003_listing_language.sql
 ```
 
 | Archivo | Qué hace | Estado |

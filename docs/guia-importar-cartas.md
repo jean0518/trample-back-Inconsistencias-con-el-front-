@@ -2,7 +2,9 @@
 
 > **Flujo oficial:** la única forma de agregar cartas al catálogo es desde
 > **Admin → Inventario → "Agregar cartas"**. El diálogo busca en Scrydex,
-> permite seleccionar varias cartas y las importa todas juntas a la DB.
+> permite seleccionar varias cartas y las publica directo al **inventario**
+> (listings) con cantidad, precio e idioma. El catálogo público se alimenta
+> del inventario: una carta sin listing activo no aparece en la tienda.
 
 ---
 
@@ -33,7 +35,7 @@ Guardá el `ExternalID` de la expansión elegida (es el `expansion_code` de Scry
 > Si no aparecen expansiones, un admin debe sincronizarlas primero:
 > `POST /admin/pokemon/expansions/sync`, `POST /admin/magic/expansions/sync`.
 
-## Paso 3 — Buscar en Scrydex (5 filtros, todos server-side)
+## Paso 3 — Buscar en Scrydex (filtros, todos server-side)
 
 Requiere **token de admin**.
 
@@ -50,6 +52,7 @@ Content-Type: application/json
 | `rarity`         | No        | Rareza exacta (ej: "Rare Holo")                    |
 | `variants`       | No        | Array de variantes (ej: ["non-foil", "foil"])      |
 | `type`           | No        | Tipo de carta (ej: "Fire", "Creature")             |
+| `supertype`      | No        | Supertipo (ej: "Pokémon", "Trainer")               |
 
 **Response**
 
@@ -61,33 +64,69 @@ Content-Type: application/json
 }
 ```
 
-El `search_id` expira a los **15 minutos**.
+El `search_id` expira a los **15 minutos**. La selección persiste aunque
+cambies de juego o hagas otra búsqueda: podés acumular grupos antes de importar.
 
-## Paso 4 — Importar TODAS las cartas seleccionadas
+## Paso 4 — Publicar al inventario TODAS las seleccionadas
 
-Con el `search_id` y los `external_id` de todas las cartas marcadas:
+Con el `search_id` y los datos de publicación de cada carta:
 
 ```
-POST /admin/cards/import
+POST /admin/cards/import-listing
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
 ```json
 {
-  "search_id": "search_e0d18c57ac78df66",
-  "external_ids": ["sv8-54", "sv8-55", "sv8-199"]
+  "groups": [
+    {
+      "search_id": "search_e0d18c57ac78df66",
+      "items": [
+        { "external_id": "sv8-54", "quantity": 5, "price_usd": 2.10, "language": "Inglés" },
+        { "external_id": "sv8-199", "quantity": 1 }
+      ]
+    }
+  ]
 }
 ```
+
+Reglas:
+
+- `price_usd` es opcional: si no viene se usa el **precio de mercado NM**;
+  error si la carta no tiene precio de mercado.
+- `language` opcional (default `"Inglés"`).
+- La carta se guarda en el catálogo y se crea su listing en un solo paso.
+- Si el admin ya tenía un listing vigente para esa variante, **se suma stock**
+  conservando precio e idioma originales (`merged: true`).
 
 **Response**
 
 ```json
-{ "imported": 3, "cards": [...] }
+{
+  "imported": 2,
+  "listings": [
+    {
+      "listing_id": 12, "game_code": "pokemon", "external_id": "sv8-54",
+      "card_name": "...", "variant_name": "Normal",
+      "quantity": 5, "price_usd": 2.10, "price_cop": 8820,
+      "status": "active", "merged": false
+    }
+  ]
+}
 ```
 
-Las cartas quedan guardadas en el catálogo (`GET /catalog/cards`) y son
-consumidas por la tienda pública.
+El precio COP lo calcula el backend con la TRM del día.
+
+## Gestión posterior del stock
+
+```
+PATCH /listings/{id}   { "quantity": 3 }
+```
+
+- `quantity == 0` ⇒ el listing pasa a `inactive` (deja de verse en la tienda).
+- `quantity > 0` ⇒ vuelve a `active`.
+- `DELETE /listings/{id}` elimina el listing definitivamente.
 
 ---
 
@@ -95,35 +134,28 @@ consumidas por la tienda pública.
 
 ```
 Inventario → "Agregar cartas"
-  ├─ GET /games                        → elegir juego
-  ├─ GET /expansions?game_id={id}      → elegir expansión
-  ├─ POST /scrydex/{code}/cards        → buscar por nombre + filtros
-  ├─ (selección múltiple en el diálogo)
-  └─ POST /admin/cards/import          → guarda todas las seleccionadas
+  ├─ GET /games                          → elegir juego
+  ├─ GET /expansions?game_id={id}        → elegir expansión
+  ├─ POST /scrydex/{code}/cards          → buscar por nombre + filtros
+  ├─ (selección múltiple entre búsquedas)
+  └─ POST /admin/cards/import-listing    → carta + listing juntos
 
-GET /catalog/cards                     → catálogo consumido por la tienda
+GET /catalog/cards                       → catálogo público (solo con stock activo)
+PATCH /listings/{id}                     → ajustar stock (0 = inactivo)
 ```
 
 ---
 
 ## Endpoints eliminados (legacy)
 
-| Endpoint eliminado                  | Reemplazo                          |
-|-------------------------------------|------------------------------------|
-| `POST /admin/pokemon/cards/import`  | búsqueda + `POST /admin/cards/import` |
-| `POST /admin/magic/cards/import`    | búsqueda + `POST /admin/cards/import` |
-| `GET /cards` (no existía en backend)| `GET /catalog/cards`               |
-
-## Catálogo DB
-
-```
-GET /catalog/cards?game_code=&expansion_id=&name=&rarity=&type=&page=&page_size=
-```
-
-Acepta los mismos parámetros de búsqueda (más paginación) y es público
-(lo consume la tienda y la vista admin "Catálogo DB").
+| Endpoint eliminado                  | Reemplazo                                    |
+|-------------------------------------|----------------------------------------------|
+| `POST /admin/pokemon/cards/import`  | búsqueda + `POST /admin/cards/import-listing` |
+| `POST /admin/magic/cards/import`    | búsqueda + `POST /admin/cards/import-listing` |
+| `POST /admin/cards/import`          | `POST /admin/cards/import-listing`           |
+| `GET /cards` (no existía en backend)| `GET /catalog/cards`                         |
 
 ## Seguridad
 
 Todas las rutas `/scrydex/*` requieren **rol admin** (antes magic/riftbound
-estaban sin proteger).
+estaban sin proteger). Las rutas `/admin/*` también.

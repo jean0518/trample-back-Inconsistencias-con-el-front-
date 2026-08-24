@@ -2,6 +2,10 @@
 
 > Revisión de arquitectura y calidad realizada sobre el código fuente (backend Go, arquitectura hexagonal).
 > Fecha: 2026-08-13
+>
+> **Estado:** los ítems 1–13 y 15 ya están aplicados. Los marcados
+> **(recomendación)** (14, 16–23) siguen abiertos como backlog de mejora;
+> revisarlos antes de descartar este documento.
 
 ## Resumen
 

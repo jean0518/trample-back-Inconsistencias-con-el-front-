@@ -212,7 +212,7 @@ func (h *PokemonHandler) ImportCards(w http.ResponseWriter, r *http.Request) {
 //	@Accept       json
 //	@Produce      json
 //	@Param        body  body      object{groups=[]object{search_id=string,items=[]object{external_id=string,quantity=integer,price_usd=number,language=string}}}  true  "Grupos por búsqueda con los datos de publicación"
-//	@Success      200   {object}  object{imported=integer,listings=[]appCatalog.ImportedListing}
+//	@Success      200   {object}  object{imported=integer,listings=[]catalog.ImportedListing}
 //	@Failure      400   {object}  object{error=string}
 //	@Router       /admin/cards/import-listing [post]
 func (h *PokemonHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {

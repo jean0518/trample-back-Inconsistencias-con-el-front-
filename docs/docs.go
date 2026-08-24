@@ -15,7 +15,7 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/admin/pokemon/cards/import": {
+        "/admin/cards/import": {
             "post": {
                 "consumes": [
                     "application/json"
@@ -26,24 +26,32 @@ const docTemplate = `{
                 "tags": [
                     "admin"
                 ],
-                "summary": "Importar cartas Pokémon",
+                "summary": "Importar cartas seleccionadas de búsquedas",
                 "parameters": [
                     {
-                        "description": "Datos de la carta",
+                        "description": "Grupos por búsqueda: search_id devuelto + IDs elegidos",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
                             "type": "object",
                             "properties": {
-                                "expansion_name": {
-                                    "type": "string"
-                                },
-                                "name": {
-                                    "type": "string"
-                                },
-                                "rarity": {
-                                    "type": "string"
+                                "groups": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "external_ids": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "search_id": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -80,6 +88,94 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/cards/import-listing": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Importar cartas y publicarlas al inventario",
+                "parameters": [
+                    {
+                        "description": "Grupos por búsqueda con los datos de publicación",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "groups": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "items": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "external_id": {
+                                                            "type": "string"
+                                                        },
+                                                        "language": {
+                                                            "type": "string"
+                                                        },
+                                                        "price_usd": {
+                                                            "type": "number"
+                                                        },
+                                                        "quantity": {
+                                                            "type": "integer"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "search_id": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "imported": {
+                                    "type": "integer"
+                                },
+                                "listings": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/catalog.ImportedListing"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "properties": {
@@ -166,6 +262,26 @@ const docTemplate = `{
                             "properties": {
                                 "token": {
                                     "type": "string"
+                                },
+                                "user": {
+                                    "type": "object",
+                                    "properties": {
+                                        "email": {
+                                            "type": "string"
+                                        },
+                                        "first_name": {
+                                            "type": "string"
+                                        },
+                                        "id": {
+                                            "type": "integer"
+                                        },
+                                        "last_name": {
+                                            "type": "string"
+                                        },
+                                        "role": {
+                                            "type": "string"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -227,17 +343,28 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "properties": {
-                                "email": {
+                                "token": {
                                     "type": "string"
                                 },
-                                "first_name": {
-                                    "type": "string"
-                                },
-                                "id": {
-                                    "type": "integer"
-                                },
-                                "last_name": {
-                                    "type": "string"
+                                "user": {
+                                    "type": "object",
+                                    "properties": {
+                                        "email": {
+                                            "type": "string"
+                                        },
+                                        "first_name": {
+                                            "type": "string"
+                                        },
+                                        "id": {
+                                            "type": "integer"
+                                        },
+                                        "last_name": {
+                                            "type": "string"
+                                        },
+                                        "role": {
+                                            "type": "string"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -254,7 +381,98 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Contraseña muy corta",
+                        "description": "Datos de validación inválidos",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/catalog/cards": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "catalog"
+                ],
+                "summary": "Listar cartas del catálogo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Código del juego (pokemon, mtg, riftbound)",
+                        "name": "game_code",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "ID de la expansión",
+                        "name": "expansion_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Nombre parcial de la carta",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Rareza exacta (ej: Rare Holo)",
+                        "name": "rarity",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Tipo de carta (ej: Fire para Pokémon, Creature para Magic)",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Página (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Resultados por página (default 20, max 100)",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "cards": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/catalog.CardSummary"
+                                    }
+                                },
+                                "page": {
+                                    "type": "integer"
+                                },
+                                "page_size": {
+                                    "type": "integer"
+                                },
+                                "total": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "properties": {
@@ -282,12 +500,375 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/catalog.Card"
+                                "$ref": "#/definitions/catalog.Expansion"
                             }
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/expansions": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "catalog"
+                ],
+                "summary": "Listar expansiones",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "ID del juego (opcional)",
+                        "name": "game_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/http.expansionResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/games": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "catalog"
+                ],
+                "summary": "Listar juegos",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/http.gameResponse"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/listings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "listings"
+                ],
+                "summary": "Listar listings",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Límite",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/http.listingResponse"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "listings"
+                ],
+                "summary": "Crear listing",
+                "parameters": [
+                    {
+                        "description": "Datos del listing",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.createListingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/http.listingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/listings/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "listings"
+                ],
+                "summary": "Eliminar listing",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "ID del listing",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "listings"
+                ],
+                "summary": "Actualizar cantidad de un listing",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "ID del listing",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Nueva cantidad (0 = inactivo)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "quantity": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/http.listingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "error": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "properties": {
@@ -314,7 +895,7 @@ const docTemplate = `{
                 "summary": "Buscar cartas Magic",
                 "parameters": [
                     {
-                        "description": "Filtros",
+                        "description": "Filtros (name es requerido)",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -329,67 +910,9 @@ const docTemplate = `{
                                 "rarity": {
                                     "type": "string"
                                 },
-                                "variants": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/catalog.Card"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "error": {
+                                "type": {
                                     "type": "string"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/scrydex/magic/cards/{id}": {
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "magic"
-                ],
-                "summary": "Obtener carta Magic por ID",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "ID de la carta",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Variantes",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
+                                },
                                 "variants": {
                                     "type": "array",
                                     "items": {
@@ -404,7 +927,21 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/catalog.Card"
+                            "type": "object",
+                            "properties": {
+                                "cards": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/catalog.Card"
+                                    }
+                                },
+                                "search_id": {
+                                    "type": "string"
+                                },
+                                "total": {
+                                    "type": "integer"
+                                }
+                            }
                         }
                     },
                     "400": {
@@ -435,7 +972,7 @@ const docTemplate = `{
                 "summary": "Buscar cartas Pokémon",
                 "parameters": [
                     {
-                        "description": "Filtros de búsqueda",
+                        "description": "Filtros de búsqueda (name es requerido)",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -448,6 +985,12 @@ const docTemplate = `{
                                     "type": "string"
                                 },
                                 "rarity": {
+                                    "type": "string"
+                                },
+                                "supertype": {
+                                    "type": "string"
+                                },
+                                "type": {
                                     "type": "string"
                                 },
                                 "variants": {
@@ -464,9 +1007,20 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/catalog.Card"
+                            "type": "object",
+                            "properties": {
+                                "cards": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/catalog.Card"
+                                    }
+                                },
+                                "search_id": {
+                                    "type": "string"
+                                },
+                                "total": {
+                                    "type": "integer"
+                                }
                             }
                         }
                     },
@@ -556,7 +1110,7 @@ const docTemplate = `{
                 "summary": "Buscar cartas Riftbound",
                 "parameters": [
                     {
-                        "description": "Filtros",
+                        "description": "Filtros (name es requerido)",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -569,6 +1123,9 @@ const docTemplate = `{
                                     "type": "string"
                                 },
                                 "rarity": {
+                                    "type": "string"
+                                },
+                                "type": {
                                     "type": "string"
                                 },
                                 "variants": {
@@ -585,9 +1142,20 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/catalog.Card"
+                            "type": "object",
+                            "properties": {
+                                "cards": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/catalog.Card"
+                                    }
+                                },
+                                "search_id": {
+                                    "type": "string"
+                                },
+                                "total": {
+                                    "type": "integer"
+                                }
                             }
                         }
                     },
@@ -683,6 +1251,19 @@ const docTemplate = `{
                         "type": "object"
                     }
                 },
+                "color_identity": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "colors": {
+                    "description": "MTG",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "evolves_from": {
                     "type": "array",
                     "items": {
@@ -698,6 +1279,12 @@ const docTemplate = `{
                 "external_id": {
                     "type": "string"
                 },
+                "faces": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
                 "flavor_text": {
                     "type": "string"
                 },
@@ -710,11 +1297,20 @@ const docTemplate = `{
                         "$ref": "#/definitions/catalog.Image"
                     }
                 },
-                "language": {
+                "keywords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "layout": {
                     "type": "string"
                 },
-                "language_code": {
+                "mana_cost": {
                     "type": "string"
+                },
+                "mana_value": {
+                    "type": "integer"
                 },
                 "name": {
                     "type": "string"
@@ -726,6 +1322,9 @@ const docTemplate = `{
                     }
                 },
                 "number": {
+                    "type": "string"
+                },
+                "power": {
                     "type": "string"
                 },
                 "printed_number": {
@@ -749,6 +1348,18 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rulings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
                 "subtypes": {
                     "type": "array",
                     "items": {
@@ -756,6 +1367,12 @@ const docTemplate = `{
                     }
                 },
                 "supertype": {
+                    "type": "string"
+                },
+                "toughness": {
+                    "type": "string"
+                },
+                "type_line": {
                     "type": "string"
                 },
                 "types": {
@@ -778,6 +1395,45 @@ const docTemplate = `{
                 }
             }
         },
+        "catalog.CardSummary": {
+            "type": "object",
+            "properties": {
+                "expansion": {
+                    "$ref": "#/definitions/catalog.ExpansionBrief"
+                },
+                "external_id": {
+                    "type": "string"
+                },
+                "game_code": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "image": {
+                    "$ref": "#/definitions/catalog.ImageBrief"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "rarity": {
+                    "type": "string"
+                },
+                "stock": {
+                    "description": "Stock agregado de listings activos con cantidad \u003e 0. El catálogo\npúblico solo muestra cartas con stock disponible.",
+                    "type": "integer"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/catalog.VariantBrief"
+                    }
+                }
+            }
+        },
         "catalog.Expansion": {
             "type": "object",
             "properties": {
@@ -787,11 +1443,11 @@ const docTemplate = `{
                 "external_id": {
                     "type": "string"
                 },
-                "language": {
-                    "type": "string"
+                "game_id": {
+                    "type": "integer"
                 },
-                "language_code": {
-                    "type": "string"
+                "id": {
+                    "type": "integer"
                 },
                 "logo": {
                     "type": "string"
@@ -816,6 +1472,26 @@ const docTemplate = `{
                 }
             }
         },
+        "catalog.ExpansionBrief": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "logo_url": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "symbol_url": {
+                    "type": "string"
+                }
+            }
+        },
         "catalog.Image": {
             "type": "object",
             "properties": {
@@ -829,6 +1505,55 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "catalog.ImageBrief": {
+            "type": "object",
+            "properties": {
+                "large": {
+                    "type": "string"
+                },
+                "medium": {
+                    "type": "string"
+                },
+                "small": {
+                    "type": "string"
+                }
+            }
+        },
+        "catalog.ImportedListing": {
+            "type": "object",
+            "properties": {
+                "card_name": {
+                    "type": "string"
+                },
+                "external_id": {
+                    "type": "string"
+                },
+                "game_code": {
+                    "type": "string"
+                },
+                "listing_id": {
+                    "type": "integer"
+                },
+                "merged": {
+                    "type": "boolean"
+                },
+                "price_cop": {
+                    "type": "number"
+                },
+                "price_usd": {
+                    "type": "number"
+                },
+                "quantity": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "variant_name": {
                     "type": "string"
                 }
             }
@@ -889,6 +1614,124 @@ const docTemplate = `{
                     "$ref": "#/definitions/catalog.Price"
                 },
                 "origin": {
+                    "type": "string"
+                }
+            }
+        },
+        "catalog.VariantBrief": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "price_cop": {
+                    "type": "integer"
+                },
+                "price_usd": {
+                    "type": "number"
+                }
+            }
+        },
+        "http.createListingRequest": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string"
+                },
+                "price_usd": {
+                    "type": "number"
+                },
+                "quantity": {
+                    "type": "integer"
+                },
+                "variant_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "http.expansionResponse": {
+            "type": "object",
+            "properties": {
+                "Code": {
+                    "type": "string"
+                },
+                "ExternalID": {
+                    "type": "string"
+                },
+                "GameID": {
+                    "type": "integer"
+                },
+                "ID": {
+                    "type": "integer"
+                },
+                "Name": {
+                    "type": "string"
+                },
+                "ReleasedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.gameResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.listingResponse": {
+            "type": "object",
+            "properties": {
+                "CardImage": {
+                    "type": "string"
+                },
+                "CardName": {
+                    "type": "string"
+                },
+                "CreatedAt": {
+                    "type": "string"
+                },
+                "ExpansionName": {
+                    "type": "string"
+                },
+                "GameName": {
+                    "type": "string"
+                },
+                "ID": {
+                    "type": "integer"
+                },
+                "Language": {
+                    "type": "string"
+                },
+                "PriceCOP": {
+                    "type": "number"
+                },
+                "PriceUSD": {
+                    "type": "number"
+                },
+                "Quantity": {
+                    "type": "integer"
+                },
+                "SellerID": {
+                    "type": "integer"
+                },
+                "Status": {
+                    "type": "string"
+                },
+                "UpdatedAt": {
+                    "type": "string"
+                },
+                "VariantID": {
+                    "type": "integer"
+                },
+                "VariantName": {
                     "type": "string"
                 }
             }

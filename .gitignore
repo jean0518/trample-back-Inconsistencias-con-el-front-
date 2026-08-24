@@ -2,7 +2,6 @@
 .Claude/
 .DS_Store
 /db/
-migrations/
 
 # Builds y artefactos
 bin/

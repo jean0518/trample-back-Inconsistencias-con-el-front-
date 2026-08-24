@@ -96,6 +96,10 @@ Reglas:
 - `price_usd` es opcional: si no viene se usa el **precio de mercado NM**;
   error si la carta no tiene precio de mercado.
 - `language` opcional (default `"Inglés"`).
+- **Reglas de precio COP** (`listing.StandardizedPriceCOP`):
+  - Carta por debajo de 1 USD ⇒ precio fijo de **$2.000 COP**.
+  - Resto ⇒ TRM del día redondeada hacia arriba al siguiente múltiplo de
+    **1.000** (ej: 10.447 ⇒ **$11.000 COP**).
 - La carta se guarda en el catálogo y se crea su listing en un solo paso.
 - Si el admin ya tenía un listing vigente para esa variante, **se suma stock**
   conservando precio e idioma originales (`merged: true`).

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 	"trample-back/internal/domain/catalog"
+	"trample-back/internal/domain/listing"
 	"trample-back/internal/ports/out"
 )
 
@@ -131,7 +132,7 @@ func (uc *SearchScrydex) applyTRM(ctx context.Context, cards []catalog.Card) ([]
 			if p == nil {
 				continue
 			}
-			p.MarketCOP = int64(math.Round(p.MarketUSD * trm))
+			p.MarketCOP = int64(listing.StandardizedPriceCOP(p.MarketUSD, trm))
 			p.LowCOP = int64(math.Round(p.LowUSD * trm))
 			p.TRMUsed = trm
 		}

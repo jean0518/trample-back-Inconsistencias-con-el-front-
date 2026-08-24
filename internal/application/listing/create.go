@@ -3,7 +3,6 @@ package listing
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"trample-back/internal/domain/listing"
 	"trample-back/internal/ports/out"
@@ -23,6 +22,6 @@ func (uc *CreateListingUseCase) Execute(ctx context.Context, input listing.Creat
 	if err != nil {
 		return listing.Listing{}, fmt.Errorf("obtener TRM: %w", err)
 	}
-	input.PriceCOP = math.Round(input.PriceUSD * rate)
+	input.PriceCOP = listing.StandardizedPriceCOP(input.PriceUSD, rate)
 	return uc.repo.Create(ctx, input)
 }

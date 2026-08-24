@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
@@ -202,6 +201,6 @@ func resolvePrice(sent *float64, variant catalog.Variant, rate float64, cardName
 	default:
 		return 0, 0, fmt.Errorf("la carta %q no tiene precio de mercado: indicá price_usd", cardName)
 	}
-	cop := math.Round(usd * rate)
+	cop := listing.StandardizedPriceCOP(usd, rate)
 	return usd, cop, nil
 }

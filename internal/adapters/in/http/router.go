@@ -85,7 +85,6 @@ func NewRouter(h Handlers) http.Handler {
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
-		r.Post("/cards/import", h.Pokemon.ImportCards)
 		r.Post("/cards/import-listing", h.Pokemon.ImportToListing)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)

@@ -229,6 +229,15 @@ func (c *Client) searchOnce(ctx context.Context, gameCode, q string, variants []
 	return cards, nil
 }
 
+// expansionsPath devuelve el segmento de ruta que usa Scrydex para cada juego.
+// MTG usa "magicthegathering" en el path de expansiones aunque las cartas usen "mtg".
+func expansionsPath(gameCode string) string {
+	if gameCode == "mtg" {
+		return "magicthegathering"
+	}
+	return gameCode
+}
+
 func (c *Client) FetchExpansions(ctx context.Context, gameCode string) ([]catalog.Expansion, error) {
 	const pageSize = 100
 
@@ -241,7 +250,7 @@ func (c *Client) FetchExpansions(ctx context.Context, gameCode string) ([]catalo
 	page := 1
 
 	for {
-		endpoint := fmt.Sprintf("%s/%s/v1/expansions?page_size=%d&page=%d", baseURL, gameCode, pageSize, page)
+		endpoint := fmt.Sprintf("%s/%s/v1/expansions?page_size=%d&page=%d", baseURL, expansionsPath(gameCode), pageSize, page)
 		slog.Info("scrydex expansions request", slog.String("url", endpoint))
 
 		if err := c.get(ctx, endpoint, &envelope); err != nil {
@@ -272,8 +281,8 @@ func (c *Client) FetchExpansions(ctx context.Context, gameCode string) ([]catalo
 
 func (c *Client) FetchCard(ctx context.Context, gameCode, externalID string, variants []string) (*catalog.Card, error) {
 	endpoint := fmt.Sprintf(
-		"%s/%s/v1/cards/%s?include=prices,images,variants",
-		baseURL, gameCode, externalID,
+		"%s%s/cards/%s?include=prices,images,variants",
+		baseURL, cardsPath(gameCode), externalID,
 	)
 
 	slog.Info("scrydex request", slog.String("url", endpoint))
@@ -504,9 +513,12 @@ func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype strin
 	return strings.Join(parts, " ")
 }
 
-// cardsPath construye la ruta base de la API. La búsqueda usa el idioma por
-// defecto de Scrydex (inglés): /pokemon/v1/cards
+// cardsPath construye la ruta base de la API.
+// MTG usa "magicthegathering" en todos sus endpoints de Scrydex.
 func cardsPath(gameCode string) string {
+	if gameCode == "mtg" {
+		return "/magicthegathering/v1"
+	}
 	return fmt.Sprintf("/%s/v1", gameCode)
 }
 

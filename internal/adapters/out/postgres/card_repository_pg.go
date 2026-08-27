@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 
@@ -73,63 +71,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 		return fmt.Errorf("upsert carta: %w", err)
 	}
 
-	// 4. Detalles específicos por juego
-	switch gameCode {
-	case "pokemon":
-		hp, _ := strconv.Atoi(card.HP)
-		stage := ""
-		if len(card.Subtypes) > 0 {
-			stage = card.Subtypes[0]
-		}
-		evolvesFrom := strings.Join(card.EvolvesFrom, ", ")
-		_, err = tx.Exec(ctx, `
-			INSERT INTO pokemon_card_details (card_id, hp, types, evolves_from, stage, attacks, weaknesses, resistances, retreat_cost)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			ON CONFLICT (card_id) DO UPDATE SET
-				hp           = EXCLUDED.hp,
-				types        = EXCLUDED.types,
-				evolves_from = EXCLUDED.evolves_from,
-				stage        = EXCLUDED.stage,
-				attacks      = EXCLUDED.attacks,
-				weaknesses   = EXCLUDED.weaknesses,
-				resistances  = EXCLUDED.resistances,
-				retreat_cost = EXCLUDED.retreat_cost
-		`, cardID, hp, card.Types, evolvesFrom, stage,
-			nullableJSON(card.Attacks), nullableJSON(card.Weaknesses), nullableJSON(card.Resistances),
-			len(card.RetreatCost),
-		)
-		if err != nil {
-			return fmt.Errorf("upsert pokemon_card_details: %w", err)
-		}
-	case "mtg":
-		rulesJSON, _ := json.Marshal(card.Rules)
-		_, err = tx.Exec(ctx, `
-			INSERT INTO mtg_card_details (card_id, mana_cost, mana_value, colors, color_identity, power, toughness, type_line, rules, keywords, layout, faces, rulings)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-			ON CONFLICT (card_id) DO UPDATE SET
-				mana_cost      = EXCLUDED.mana_cost,
-				mana_value     = EXCLUDED.mana_value,
-				colors         = EXCLUDED.colors,
-				color_identity = EXCLUDED.color_identity,
-				power          = EXCLUDED.power,
-				toughness      = EXCLUDED.toughness,
-				type_line      = EXCLUDED.type_line,
-				rules          = EXCLUDED.rules,
-				keywords       = EXCLUDED.keywords,
-				layout         = EXCLUDED.layout,
-				faces          = EXCLUDED.faces,
-				rulings        = EXCLUDED.rulings
-		`, cardID, card.ManaCost, card.ManaValue, card.Colors, card.ColorIdentity,
-			card.Power, card.Toughness, card.TypeLine,
-			nullableJSON(rulesJSON), card.Keywords, card.Layout,
-			nullableJSON(card.Faces), nullableJSON(card.Rulings),
-		)
-		if err != nil {
-			return fmt.Errorf("upsert mtg_card_details: %w", err)
-		}
-	}
-
-	// 5. Imágenes de la carta (delete + re-insert para mantenerlas actualizadas)
+	// 4. Imágenes de la carta (delete + re-insert para mantenerlas actualizadas)
 	if _, err := tx.Exec(ctx, `DELETE FROM card_images WHERE card_id = $1`, cardID); err != nil {
 		return fmt.Errorf("limpiar imágenes de carta: %w", err)
 	}
@@ -142,7 +84,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 		}
 	}
 
-	// 6. Variantes
+	// 5. Variantes
 	for _, variant := range card.Variants {
 		var variantID int64
 		err = tx.QueryRow(ctx, `
@@ -235,11 +177,6 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
 		  AND ($3::text   = '' OR c.name ILIKE '%' || $3 || '%')
 		  AND ($6::text   = '' OR c.rarity      = $6)
-		  AND (
-			$7::text = ''
-			OR EXISTS (SELECT 1 FROM pokemon_card_details pd WHERE pd.card_id = c.id AND $7::text = ANY(pd.types))
-			OR EXISTS (SELECT 1 FROM mtg_card_details md WHERE md.card_id = c.id AND md.type_line ILIKE '%' || $7 || '%')
-		  )
 		  -- El catálogo público refleja el inventario: solo cartas con
 		  -- al menos un listing activo y con stock.
 		  AND EXISTS (
@@ -250,7 +187,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		  )
 		ORDER BY e.release_date DESC, c.id
 		LIMIT $4 OFFSET $5
-	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity, p.Type)
+	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listar cartas: %w", err)
 	}
@@ -320,11 +257,4 @@ func (r *CardRepository) DeleteCard(ctx context.Context, id int64) error {
 		return fmt.Errorf("carta %d no encontrada", id)
 	}
 	return nil
-}
-
-func nullableJSON(raw []byte) interface{} {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	return string(raw)
 }

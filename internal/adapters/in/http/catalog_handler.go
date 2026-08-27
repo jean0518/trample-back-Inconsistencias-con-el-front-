@@ -25,7 +25,6 @@ func NewCatalogHandler(listCards *appCatalog.ListCardsUseCase) *CatalogHandler {
 //	@Param        expansion_id  query  int     false  "ID de la expansión"
 //	@Param        name          query  string  false  "Nombre parcial de la carta"
 //	@Param        rarity        query  string  false  "Rareza exacta (ej: Rare Holo)"
-//	@Param        type          query  string  false  "Tipo de carta (ej: Fire para Pokémon, Creature para Magic)"
 //	@Param        page          query  int     false  "Página (default 1)"
 //	@Param        page_size     query  int     false  "Resultados por página (default 20, max 100)"
 //	@Success      200  {object}  object{page=int,page_size=int,total=int,cards=[]catalog.CardSummary}
@@ -43,7 +42,6 @@ func (h *CatalogHandler) ListCards(w http.ResponseWriter, r *http.Request) {
 		ExpansionID: expansionID,
 		Name:        q.Get("name"),
 		Rarity:      q.Get("rarity"),
-		Type:        q.Get("type"),
 		Page:        page,
 		PageSize:    pageSize,
 	})

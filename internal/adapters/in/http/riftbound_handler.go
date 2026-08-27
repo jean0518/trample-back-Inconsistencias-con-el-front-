@@ -10,11 +10,46 @@ import (
 )
 
 type RiftboundHandler struct {
-	catalog *appCatalog.SearchScrydex
+	catalog    *appCatalog.SearchScrydex
+	expansions *appCatalog.SyncExpansionsUseCase
 }
 
-func NewRiftboundHandler(catalog *appCatalog.SearchScrydex) *RiftboundHandler {
-	return &RiftboundHandler{catalog: catalog}
+func NewRiftboundHandler(catalog *appCatalog.SearchScrydex, expansions *appCatalog.SyncExpansionsUseCase) *RiftboundHandler {
+	return &RiftboundHandler{catalog: catalog, expansions: expansions}
+}
+
+// SyncExpansions sincroniza las expansiones de Riftbound desde Scrydex.
+//
+//	@Summary      Sincronizar expansiones Riftbound
+//	@Tags         admin
+//	@Produce      json
+//	@Success      200  {object}  object{synced=integer}
+//	@Failure      500  {object}  object{error=string}
+//	@Router       /admin/riftbound/expansions/sync [post]
+func (h *RiftboundHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) {
+	count, err := h.expansions.SyncRiftbound(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"synced": count})
+}
+
+// ListExpansions lista las expansiones de Riftbound guardadas localmente.
+//
+//	@Summary      Listar expansiones Riftbound
+//	@Tags         riftbound
+//	@Produce      json
+//	@Success      200  {array}   catalog.Expansion
+//	@Failure      500  {object}  object{error=string}
+//	@Router       /catalog/riftbound/expansions [get]
+func (h *RiftboundHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
+	expansions, err := h.expansions.ListRiftbound(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, expansions)
 }
 
 // Search busca cartas de Riftbound en Scrydex.

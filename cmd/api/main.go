@@ -72,9 +72,10 @@ func main() {
 	deleteListingUC := appListing.NewDeleteListingUseCase(listingRepo)
 
 	// Router
+	secureCookie := cfg.Env == "production"
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
-		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC),
+		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, secureCookie),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
@@ -82,6 +83,7 @@ func main() {
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		AuthMiddleware: authMiddleware,
+		FrontendURL:    cfg.FrontendURL,
 	})
 
 	srv := &http.Server{

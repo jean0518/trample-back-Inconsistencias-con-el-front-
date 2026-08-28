@@ -11,20 +11,23 @@ import (
 )
 
 const authCtxKey ctxKey = "auth_user"
+const AuthCookieName = "trample_token"
 
 type ctxKey string
 
 type AuthUser struct {
-	ID    int64
-	Email string
-	Name  string
-	Role  string
+	ID        int64
+	Email     string
+	FirstName string
+	LastName  string
+	Role      string
 }
 
 type authClaims struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Role  string `json:"role"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Role      string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -36,19 +39,28 @@ func NewAuthMiddleware(secret []byte) *AuthMiddleware {
 	return &AuthMiddleware{secret: secret}
 }
 
-// RequireAuth valida el JWT de la request (header Authorization: Bearer <token>)
-// y guarda los claims en el contexto.
+// RequireAuth valida el JWT desde la cookie HttpOnly o el header Authorization: Bearer <token>.
 func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
+		rawToken := ""
+
+		if cookie, err := r.Cookie(AuthCookieName); err == nil {
+			rawToken = cookie.Value
+		} else {
+			header := r.Header.Get("Authorization")
+			if strings.HasPrefix(header, "Bearer ") {
+				rawToken = strings.TrimPrefix(header, "Bearer ")
+			}
+		}
+
+		if rawToken == "" {
 			Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
 		claims := &authClaims{}
 		token, err := jwt.ParseWithClaims(
-			strings.TrimPrefix(header, "Bearer "),
+			rawToken,
 			claims,
 			func(t *jwt.Token) (any, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -78,10 +90,11 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), authCtxKey, AuthUser{
-			ID:    id,
-			Email: claims.Email,
-			Name:  claims.Name,
-			Role:  claims.Role,
+			ID:        id,
+			Email:     claims.Email,
+			FirstName: claims.FirstName,
+			LastName:  claims.LastName,
+			Role:      claims.Role,
 		})
 
 		next.ServeHTTP(w, r.WithContext(ctx))

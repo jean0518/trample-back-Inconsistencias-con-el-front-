@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "trample-back/docs"
 	httpadapter "trample-back/internal/adapters/in/http"
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
@@ -79,8 +78,8 @@ func main() {
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
-		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC),
-		Riftbound:      httpadapter.NewRiftboundHandler(searchUC),
+		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
+		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		AuthMiddleware: authMiddleware,
 	})

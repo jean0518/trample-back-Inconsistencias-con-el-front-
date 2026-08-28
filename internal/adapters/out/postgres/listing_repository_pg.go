@@ -40,7 +40,7 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 	rows, err := r.db.Query(ctx, `
 		SELECT
 			il.id, il.seller_id, il.variant_id,
-			c.id AS game_id, g.name AS game_name,
+			g.id AS game_id, g.name AS game_name,
 			c.name AS card_name,
 			COALESCE(
 				(SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),

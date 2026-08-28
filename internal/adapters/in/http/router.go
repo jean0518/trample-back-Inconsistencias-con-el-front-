@@ -7,7 +7,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"trample-back/internal/domain/auth"
 )
 
@@ -33,8 +32,6 @@ func NewRouter(h Handlers) http.Handler {
 
 	r.Get("/games", h.Games.List)
 	r.Get("/expansions", h.Games.ListExpansions)
-
-	r.Get("/swagger/*", httpSwagger.WrapHandler)
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Use(httprate.LimitByIP(10, time.Minute))
@@ -70,6 +67,9 @@ func NewRouter(h Handlers) http.Handler {
 		r.Route("/magic", func(r chi.Router) {
 			r.Get("/expansions", h.Magic.ListExpansions)
 		})
+		r.Route("/riftbound", func(r chi.Router) {
+			r.Get("/expansions", h.Riftbound.ListExpansions)
+		})
 	})
 
 	// Listings — inventario del vendedor autenticado
@@ -93,8 +93,12 @@ func NewRouter(h Handlers) http.Handler {
 		})
 		r.Route("/magic", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Magic.SyncExpansions)
+			r.Post("/cards/import-listing", h.Magic.ImportToListing)
 			r.Put("/cards/{id}", h.Magic.RefreshCard)
 			r.Delete("/cards/{id}", h.Magic.DeleteCard)
+		})
+		r.Route("/riftbound", func(r chi.Router) {
+			r.Post("/expansions/sync", h.Riftbound.SyncExpansions)
 		})
 	})
 

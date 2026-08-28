@@ -11,13 +11,19 @@ import (
 )
 
 type MagicHandler struct {
-	search     *appCatalog.SearchScrydex
-	expansions *appCatalog.SyncExpansionsUseCase
-	importCard *appCatalog.ImportCardUseCase
+	search        *appCatalog.SearchScrydex
+	expansions    *appCatalog.SyncExpansionsUseCase
+	importCard    *appCatalog.ImportCardUseCase
+	importListing *appCatalog.ImportListingUseCase
 }
 
-func NewMagicHandler(search *appCatalog.SearchScrydex, expansions *appCatalog.SyncExpansionsUseCase, importCard *appCatalog.ImportCardUseCase) *MagicHandler {
-	return &MagicHandler{search: search, expansions: expansions, importCard: importCard}
+func NewMagicHandler(
+	search *appCatalog.SearchScrydex,
+	expansions *appCatalog.SyncExpansionsUseCase,
+	importCard *appCatalog.ImportCardUseCase,
+	importListing *appCatalog.ImportListingUseCase,
+) *MagicHandler {
+	return &MagicHandler{search: search, expansions: expansions, importCard: importCard, importListing: importListing}
 }
 
 // Search busca cartas de Magic en Scrydex.
@@ -111,6 +117,33 @@ func (h *MagicHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"deleted": chi.URLParam(r, "id")})
+}
+
+// POST /admin/magic/cards/import-listing
+func (h *MagicHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var body struct {
+		Groups []appCatalog.ImportListingGroup `json:"groups"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+
+	listings, err := h.importListing.Execute(r.Context(), user.ID, body.Groups)
+	if err != nil {
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, map[string]any{
+		"imported": len(listings),
+		"listings": listings,
+	})
 }
 
 // PUT /admin/magic/cards/{id}

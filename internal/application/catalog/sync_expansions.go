@@ -69,3 +69,18 @@ func (uc *SyncExpansionsUseCase) SyncMTG(ctx context.Context) (int, error) {
 func (uc *SyncExpansionsUseCase) ListMTG(ctx context.Context) ([]catalog.Expansion, error) {
 	return uc.repo.ListExpansions(ctx, "mtg")
 }
+
+func (uc *SyncExpansionsUseCase) SyncRiftbound(ctx context.Context) (int, error) {
+	expansions, err := uc.scrydex.FetchExpansions(ctx, "riftbound")
+	if err != nil {
+		return 0, fmt.Errorf("traer expansiones de scrydex: %w", err)
+	}
+	if err := uc.repo.SyncExpansions(ctx, "riftbound", expansions); err != nil {
+		return 0, fmt.Errorf("guardar expansiones: %w", err)
+	}
+	return len(expansions), nil
+}
+
+func (uc *SyncExpansionsUseCase) ListRiftbound(ctx context.Context) ([]catalog.Expansion, error) {
+	return uc.repo.ListExpansions(ctx, "riftbound")
+}

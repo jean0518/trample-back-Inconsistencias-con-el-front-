@@ -25,6 +25,7 @@ import (
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
 	appListing "trample-back/internal/application/listing"
+	appOwner "trample-back/internal/application/owner"
 	"trample-back/pkg/config"
 	"trample-back/pkg/db"
 	"trample-back/pkg/logger"
@@ -56,20 +57,24 @@ func main() {
 	userRepo := postgres.NewUserRepository(pool)
 	gameRepo := postgres.NewGameRepository(pool)
 	listingRepo := postgres.NewListingRepository(pool)
+	ownerRepo := postgres.NewOwnerRepository(pool)
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
-	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, trmClient)
+	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, ownerRepo, trmClient)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
-	createListingUC := appListing.NewCreateListingUseCase(listingRepo, trmClient)
+	createListingUC := appListing.NewCreateListingUseCase(listingRepo, ownerRepo, trmClient)
 	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
 	updateStockUC := appListing.NewUpdateStockUseCase(listingRepo)
 	deleteListingUC := appListing.NewDeleteListingUseCase(listingRepo)
+	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
+	listOwnersUC := appOwner.NewListOwnersUseCase(ownerRepo)
+	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
 
 	// Router
 	secureCookie := cfg.Env == "production"
@@ -82,6 +87,7 @@ func main() {
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
+		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, listOwnersUC, deleteOwnerUC),
 		AuthMiddleware: authMiddleware,
 		FrontendURL:    cfg.FrontendURL,
 	})

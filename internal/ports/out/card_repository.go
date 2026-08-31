@@ -10,6 +10,8 @@ type ListCardsParams struct {
 	ExpansionID int64
 	Name        string
 	Rarity      string
+	OwnerID     int64
+	Language    string
 	Page        int
 	PageSize    int
 }

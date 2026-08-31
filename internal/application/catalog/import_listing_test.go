@@ -6,6 +6,7 @@ import (
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
+	"trample-back/internal/domain/owner"
 	"trample-back/internal/ports/out"
 )
 
@@ -40,8 +41,8 @@ func (f *fakeListingRepo) Create(_ context.Context, input listing.CreateInput) (
 	}, nil
 }
 
-func (f *fakeListingRepo) FindBySellerAndVariant(_ context.Context, _, variantID int64) (listing.Listing, error) {
-	if l, ok := f.existing[variantID]; ok {
+func (f *fakeListingRepo) FindBySellerAndVariantLanguageOwner(_ context.Context, _, variantID int64, language string, ownerID int64) (listing.Listing, error) {
+	if l, ok := f.existing[variantID]; ok && l.Language == language && l.OwnerID == ownerID {
 		return l, nil
 	}
 	return listing.Listing{}, listing.ErrNotFound
@@ -62,6 +63,15 @@ type fakeTRM struct{ rate float64 }
 
 func (f fakeTRM) GetRate(context.Context) (float64, error) { return f.rate, nil }
 
+type fakeOwnerRepo struct {
+	out.OwnerRepository
+	defaultOwner owner.Owner
+}
+
+func (f *fakeOwnerRepo) ListAll(context.Context) ([]owner.Owner, error) {
+	return []owner.Owner{f.defaultOwner}, nil
+}
+
 func setupListingUC(cache map[string]cachedSearch, rate float64) (*ImportListingUseCase, *fakeCardRepoVariant, *fakeListingRepo) {
 	uc := &ImportListingUseCase{}
 	uc.search = NewSearchScrydex(nil, nil)
@@ -72,6 +82,7 @@ func setupListingUC(cache map[string]cachedSearch, rate float64) (*ImportListing
 	listings := &fakeListingRepo{existing: make(map[int64]listing.Listing)}
 	uc.cards = cards
 	uc.listings = listings
+	uc.owners = &fakeOwnerRepo{defaultOwner: owner.Owner{ID: 1, Name: "trampleStore", IsDefault: true}}
 	uc.trm = fakeTRM{rate: rate}
 	return uc, cards, listings
 }
@@ -111,6 +122,9 @@ func TestImportListingCreaListingsConDefaults(t *testing.T) {
 	first := listings.inputs[0]
 	if first.SellerID != 7 || first.Quantity != 5 || first.Language != "Inglés" {
 		t.Fatalf("defaults incorrectos en listing 1: %+v", first)
+	}
+	if first.OwnerID != 1 {
+		t.Fatalf("owner por defecto no aplicado: %+v", first)
 	}
 	if first.PriceUSD != 1.50 {
 		t.Fatalf("esperaba precio de mercado 1.50, hay %f", first.PriceUSD)
@@ -191,8 +205,8 @@ func TestImportListingSumaStockSiYaExiste(t *testing.T) {
 		}},
 	}, 4000)
 	listings.existing[42] = listing.Listing{
-		ID: 99, SellerID: 7, VariantID: 42,
-		Quantity: 4, PriceUSD: 0.25, PriceCOP: 1000, Status: "active",
+		ID: 99, SellerID: 7, VariantID: 42, OwnerID: 1,
+		Quantity: 4, PriceUSD: 0.25, PriceCOP: 1000, Status: "active", Language: "Inglés",
 	}
 
 	result, err := uc.Execute(context.Background(), 7, []ImportListingGroup{

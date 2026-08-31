@@ -18,6 +18,7 @@ type Handlers struct {
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
 	Listings       *ListingHandler
+	Owners         *OwnerHandler
 	AuthMiddleware *AuthMiddleware
 	FrontendURL    string
 }
@@ -124,6 +125,11 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Post("/cards/import-listing", h.Pokemon.ImportToListing)
+		r.Route("/owners", func(r chi.Router) {
+			r.Get("/", h.Owners.List)
+			r.Post("/", h.Owners.Create)
+			r.Delete("/{id}", h.Owners.Delete)
+		})
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)

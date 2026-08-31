@@ -140,6 +140,8 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		SELECT
 			c.id,
 			c.external_id,
+			COALESCE(il_owner.language, '') AS card_language,
+			COALESCE(il_owner.owner_name, '') AS card_owner_name,
 			c.name,
 			c.number,
 			c.rarity,
@@ -169,14 +171,44 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				JOIN card_variants lcv ON lcv.id = il.variant_id
 				WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
 			), 0)::int AS stock,
+			COALESCE((
+				SELECT json_agg(l ORDER BY l.stock DESC)
+				FROM (
+					SELECT il.language AS name, SUM(il.quantity)::int AS stock
+					FROM inventory_listings il
+					JOIN card_variants lcv ON lcv.id = il.variant_id
+					WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
+					  AND il.language IS NOT NULL AND il.language <> ''
+					GROUP BY il.language
+				) l
+			), '[]')::text AS languages,
 			COUNT(*) OVER() AS total
 		FROM cards c
 		JOIN games      g ON g.id = c.game_id
 		JOIN expansions e ON e.id = c.expansion_id
+		LEFT JOIN LATERAL (
+			SELECT il.language, COALESCE(o.name, 'trampleStore') AS owner_name
+			FROM inventory_listings il
+			JOIN card_variants lcv ON lcv.id = il.variant_id
+			LEFT JOIN owners o ON o.id = il.owner_id
+			WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
+			ORDER BY il.id ASC
+			LIMIT 1
+		) il_owner ON true
 		WHERE ($1::text   = '' OR g.code          = $1)
 		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
 		  AND ($3::text   = '' OR c.name ILIKE '%' || $3 || '%')
 		  AND ($6::text   = '' OR c.rarity      = $6)
+		  AND ($7::bigint = 0  OR EXISTS (
+			SELECT 1 FROM inventory_listings il2
+			JOIN card_variants lcv2 ON lcv2.id = il2.variant_id
+			WHERE lcv2.card_id = c.id AND il2.owner_id = $7 AND il2.status = 'active' AND il2.quantity > 0
+		  ))
+		  AND ($8::text   = '' OR EXISTS (
+			SELECT 1 FROM inventory_listings il3
+			JOIN card_variants lcv3 ON lcv3.id = il3.variant_id
+			WHERE lcv3.card_id = c.id AND il3.language = $8 AND il3.status = 'active' AND il3.quantity > 0
+		  ))
 		  -- El catálogo público refleja el inventario: solo cartas con
 		  -- al menos un listing activo y con stock.
 		  AND EXISTS (
@@ -187,7 +219,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		  )
 		ORDER BY e.release_date DESC, c.id
 		LIMIT $4 OFFSET $5
-	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity)
+	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity, p.OwnerID, p.Language)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listar cartas: %w", err)
 	}
@@ -198,25 +230,31 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		total  int
 	)
 	for rows.Next() {
-		var (
-			s            catalog.CardSummary
-			variantsJSON string
-		)
-		if err := rows.Scan(
-			&s.ID, &s.ExternalID, &s.Name, &s.Number, &s.Rarity, &s.GameCode,
-			&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
-			&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
-			&s.Image.Small, &s.Image.Medium, &s.Image.Large,
-			&variantsJSON,
-			&s.Stock,
-			&total,
-		); err != nil {
-			return nil, 0, err
-		}
-		if err := json.Unmarshal([]byte(variantsJSON), &s.Variants); err != nil {
-			return nil, 0, fmt.Errorf("parsear variantes: %w", err)
-		}
-		result = append(result, s)
+	var (
+		s            catalog.CardSummary
+		variantsJSON string
+		languagesJSON string
+	)
+	if err := rows.Scan(
+		&s.ID, &s.ExternalID, &s.Language, &s.OwnerName,
+		&s.Name, &s.Number, &s.Rarity, &s.GameCode,
+		&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
+		&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
+		&s.Image.Small, &s.Image.Medium, &s.Image.Large,
+		&variantsJSON,
+		&s.Stock,
+		&languagesJSON,
+		&total,
+	); err != nil {
+		return nil, 0, err
+	}
+	if err := json.Unmarshal([]byte(variantsJSON), &s.Variants); err != nil {
+		return nil, 0, fmt.Errorf("parsear variantes: %w", err)
+	}
+	if err := json.Unmarshal([]byte(languagesJSON), &s.Languages); err != nil {
+		return nil, 0, fmt.Errorf("parsear idiomas: %w", err)
+	}
+	result = append(result, s)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err

@@ -36,9 +36,9 @@ type Card struct {
 	Layout        string          `json:"layout,omitempty"`
 	Faces         json.RawMessage `json:"faces,omitempty"   swaggertype:"array,object"`
 	Rulings       json.RawMessage `json:"rulings,omitempty" swaggertype:"array,object"`
-	Expansion           Expansion       `json:"expansion"`
-	Images              []Image         `json:"images"`
-	Variants            []Variant       `json:"variants"`
+	Expansion     Expansion       `json:"expansion"`
+	Images        []Image         `json:"images"`
+	Variants      []Variant       `json:"variants"`
 }
 
 type Expansion struct {
@@ -88,13 +88,24 @@ type CardSummary struct {
 	Variants   []VariantBrief `json:"variants"`
 	// Stock agregado de listings activos con cantidad > 0. El catálogo
 	// público solo muestra cartas con stock disponible.
-	Stock int `json:"stock"`
+	Stock     int    `json:"stock"`
+	OwnerName string `json:"owner_name"`
+	Language  string `json:"language"`
+	// Idiomas disponibles para la carta con su stock. Cuando hay más de uno,
+	// el cliente puede elegir el idioma antes de comprar.
+	Languages []CardLanguageBrief `json:"languages"`
 }
 
 type VariantBrief struct {
 	Name     string  `json:"name"`
 	PriceUSD float64 `json:"price_usd"`
 	PriceCOP int64   `json:"price_cop"`
+}
+
+// Idiomas en los que existe una carta en el inventario, con su stock.
+type CardLanguageBrief struct {
+	Name  string `json:"name"`
+	Stock int    `json:"stock"`
 }
 
 type ExpansionBrief struct {

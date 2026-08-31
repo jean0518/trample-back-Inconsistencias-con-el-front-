@@ -7,6 +7,7 @@ import (
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
+	"trample-back/internal/domain/owner"
 	"trample-back/internal/ports/out"
 )
 
@@ -18,6 +19,7 @@ type ListingItem struct {
 	Quantity   int      `json:"quantity"`
 	PriceUSD   *float64 `json:"price_usd,omitempty"`
 	Language   string   `json:"language,omitempty"`
+	OwnerID    *int64   `json:"owner_id,omitempty"`
 }
 
 // ImportListingGroup agrupa los items que provienen de una misma búsqueda.
@@ -58,6 +60,7 @@ type ImportListingUseCase struct {
 	search   *SearchScrydex
 	cards    out.CardRepository
 	listings out.ListingRepository
+	owners   out.OwnerRepository
 	trm      out.TRMClient
 }
 
@@ -65,9 +68,10 @@ func NewImportListingUseCase(
 	search *SearchScrydex,
 	cards out.CardRepository,
 	listings out.ListingRepository,
+	owners out.OwnerRepository,
 	trm out.TRMClient,
 ) *ImportListingUseCase {
-	return &ImportListingUseCase{search: search, cards: cards, listings: listings, trm: trm}
+	return &ImportListingUseCase{search: search, cards: cards, listings: listings, owners: owners, trm: trm}
 }
 
 func (uc *ImportListingUseCase) Execute(
@@ -85,6 +89,12 @@ func (uc *ImportListingUseCase) Execute(
 	rate, err := uc.trm.GetRate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("obtener TRM: %w", err)
+	}
+
+	// Resolver el owner por defecto (trampleStore).
+	defaultOwner, err := uc.findDefaultOwner(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolver propietario por defecto: %w", err)
 	}
 
 	var created []ImportedListing
@@ -129,6 +139,10 @@ func (uc *ImportListingUseCase) Execute(
 			if language == "" {
 				language = "Inglés"
 			}
+			ownerID := defaultOwner.ID
+			if item.OwnerID != nil && *item.OwnerID > 0 {
+				ownerID = *item.OwnerID
+			}
 
 			if err := uc.cards.SyncCard(ctx, cached.GameCode, card); err != nil {
 				return nil, fmt.Errorf("guardar carta %q: %w", card.Name, err)
@@ -138,9 +152,10 @@ func (uc *ImportListingUseCase) Execute(
 				return nil, fmt.Errorf("resolver variante de %q: %w", card.Name, err)
 			}
 
-			// Si el vendedor ya tiene un listing vigente para esta variante,
-			// solo se suma stock (se conserva precio e idioma originales).
-			existing, findErr := uc.listings.FindBySellerAndVariant(ctx, sellerID, variantID)
+			// Si el vendedor ya tiene un listing vigente para esta variante
+			// con el mismo idioma y propietario, se suma stock. Si no, se
+			// crea un listing nuevo (stock separado).
+			existing, findErr := uc.listings.FindBySellerAndVariantLanguageOwner(ctx, sellerID, variantID, language, ownerID)
 			var l listing.Listing
 			merged := false
 			switch {
@@ -155,6 +170,7 @@ func (uc *ImportListingUseCase) Execute(
 				l, err = uc.listings.Create(ctx, listing.CreateInput{
 					SellerID:  sellerID,
 					VariantID: variantID,
+					OwnerID:   ownerID,
 					Quantity:  item.Quantity,
 					PriceUSD:  priceUSD,
 					PriceCOP:  priceCOP,
@@ -186,6 +202,20 @@ func (uc *ImportListingUseCase) Execute(
 		return nil, fmt.Errorf("no se creó ningún listing")
 	}
 	return created, nil
+}
+
+// findDefaultOwner busca el propietario marcado como is_default.
+func (uc *ImportListingUseCase) findDefaultOwner(ctx context.Context) (owner.Owner, error) {
+	owners, err := uc.owners.ListAll(ctx)
+	if err != nil {
+		return owner.Owner{}, err
+	}
+	for _, o := range owners {
+		if o.IsDefault {
+			return o, nil
+		}
+	}
+	return owner.Owner{}, fmt.Errorf("no hay propietario por defecto configurado")
 }
 
 // resolvePrice define el precio del listing: prioriza el precio enviado por el

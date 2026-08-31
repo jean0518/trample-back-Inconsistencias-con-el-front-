@@ -21,12 +21,12 @@ func NewListingRepository(db *pgxpool.Pool) *ListingRepository {
 func (r *ListingRepository) Create(ctx context.Context, input listing.CreateInput) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO inventory_listings (seller_id, variant_id, quantity, price_usd, price_cop, language)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, seller_id, variant_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
-	`, input.SellerID, input.VariantID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language,
+		INSERT INTO inventory_listings (seller_id, variant_id, owner_id, quantity, price_usd, price_cop, language)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+	`, input.SellerID, input.VariantID, input.OwnerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language,
 	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID,
+		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
 		&l.CreatedAt, &l.UpdatedAt,
 	)
@@ -39,7 +39,7 @@ func (r *ListingRepository) Create(ctx context.Context, input listing.CreateInpu
 func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, limit, offset int) ([]listing.Listing, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
-			il.id, il.seller_id, il.variant_id,
+			il.id, il.seller_id, il.variant_id, il.owner_id,
 			g.id AS game_id, g.name AS game_name,
 			c.name AS card_name,
 			COALESCE(
@@ -49,6 +49,7 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 			) AS card_image,
 			e.name AS expansion_name,
 			cv.variant_name,
+			COALESCE(o.name, 'trampleStore') AS owner_name,
 			il.quantity, il.price_usd, il.price_cop,
 			il.status, il.language, il.created_at, il.updated_at
 		FROM inventory_listings il
@@ -56,6 +57,7 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 		JOIN cards c ON c.id = cv.card_id
 		JOIN games g ON g.id = c.game_id
 		JOIN expansions e ON e.id = c.expansion_id
+		LEFT JOIN owners o ON o.id = il.owner_id
 		WHERE il.seller_id = $1
 		ORDER BY il.created_at DESC
 		LIMIT $2 OFFSET $3
@@ -69,9 +71,10 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 	for rows.Next() {
 		var l listing.Listing
 		if err := rows.Scan(
-			&l.ID, &l.SellerID, &l.VariantID,
+			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 			&l.GameID, &l.GameName,
 			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
+			&l.OwnerName,
 			&l.Quantity, &l.PriceUSD, &l.PriceCOP,
 			&l.Status, &l.Language, &l.CreatedAt, &l.UpdatedAt,
 		); err != nil {
@@ -97,10 +100,10 @@ func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.Up
 		    END,
 		    updated_at = now()
 		WHERE id = $1 AND seller_id = $2
-		RETURNING id, seller_id, variant_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
 	`, input.ID, input.SellerID, input.Quantity,
 	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID,
+		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
 		&l.CreatedAt, &l.UpdatedAt,
 	)
@@ -113,19 +116,20 @@ func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.Up
 	return l, nil
 }
 
-// FindBySellerAndVariant devuelve el listing vigente (no 'sold') del vendedor
-// para una variante. Se usa al importar para sumar stock en vez de duplicar.
-func (r *ListingRepository) FindBySellerAndVariant(ctx context.Context, sellerID, variantID int64) (listing.Listing, error) {
+// FindBySellerAndVariantLanguageOwner devuelve el listing vigente (no 'sold')
+// del vendedor para una variante con el mismo idioma y propietario. Se usa al
+// importar para decidir si sumar stock o crear un listing nuevo.
+func (r *ListingRepository) FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID, variantID int64, language string, ownerID int64) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
-		SELECT id, seller_id, variant_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		SELECT id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
 		FROM inventory_listings
-		WHERE seller_id = $1 AND variant_id = $2 AND status <> 'sold'
+		WHERE seller_id = $1 AND variant_id = $2 AND language = $3 AND owner_id = $4 AND status <> 'sold'
 		ORDER BY updated_at DESC
 		LIMIT 1
-	`, sellerID, variantID,
+	`, sellerID, variantID, language, ownerID,
 	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID,
+		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
 		&l.CreatedAt, &l.UpdatedAt,
 	)
@@ -133,7 +137,7 @@ func (r *ListingRepository) FindBySellerAndVariant(ctx context.Context, sellerID
 		if errors.Is(err, pgx.ErrNoRows) {
 			return listing.Listing{}, listing.ErrNotFound
 		}
-		return listing.Listing{}, fmt.Errorf("buscar listing por variante: %w", err)
+		return listing.Listing{}, fmt.Errorf("buscar listing por variante/idioma/owner: %w", err)
 	}
 	return l, nil
 }
@@ -148,10 +152,10 @@ func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.Updat
 		    status = CASE WHEN status = 'inactive' THEN 'active' ELSE status END,
 		    updated_at = now()
 		WHERE id = $1 AND seller_id = $2 AND status <> 'sold'
-		RETURNING id, seller_id, variant_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
 	`, input.ID, input.SellerID, input.Quantity,
 	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID,
+		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
 		&l.CreatedAt, &l.UpdatedAt,
 	)

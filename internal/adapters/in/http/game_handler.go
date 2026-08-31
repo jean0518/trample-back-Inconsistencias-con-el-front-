@@ -30,6 +30,8 @@ type expansionResponse struct {
 	Name       string `json:"Name"`
 	Code       string `json:"Code"`
 	ReleasedAt string `json:"ReleasedAt,omitempty"`
+	LogoURL    string `json:"LogoURL,omitempty"`
+	SymbolURL  string `json:"SymbolURL,omitempty"`
 }
 
 // List devuelve los juegos soportados por el catálogo.
@@ -93,6 +95,8 @@ func (h *GamesHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
 			Name:       e.Name,
 			Code:       e.Code,
 			ReleasedAt: e.ReleaseDate,
+			LogoURL:    e.Logo,
+			SymbolURL:  e.Symbol,
 		})
 	}
 	JSON(w, http.StatusOK, resp)

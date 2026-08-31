@@ -29,6 +29,8 @@ type listingResponse struct {
 	ID            int64   `json:"ID"`
 	SellerID      int64   `json:"SellerID"`
 	VariantID     int64   `json:"VariantID"`
+	OwnerID       int64   `json:"OwnerID"`
+	OwnerName     string  `json:"OwnerName"`
 	GameName      string  `json:"GameName"`
 	CardName      string  `json:"CardName"`
 	CardImage     string  `json:"CardImage"`
@@ -45,6 +47,7 @@ type listingResponse struct {
 
 type createListingRequest struct {
 	VariantID int64   `json:"variant_id"`
+	OwnerID   *int64  `json:"owner_id,omitempty"`
 	Quantity  int     `json:"quantity"`
 	PriceUSD  float64 `json:"price_usd"`
 	Language  string  `json:"language"`
@@ -55,6 +58,8 @@ func newListingResponse(l listing.Listing) listingResponse {
 		ID:            l.ID,
 		SellerID:      l.SellerID,
 		VariantID:     l.VariantID,
+		OwnerID:       l.OwnerID,
+		OwnerName:     l.OwnerName,
 		GameName:      l.GameName,
 		CardName:      l.CardName,
 		CardImage:     l.CardImage,
@@ -138,9 +143,22 @@ func (h *ListingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		body.Language = "Inglés"
 	}
 
+	var ownerID int64
+	var err error
+	if body.OwnerID != nil && *body.OwnerID > 0 {
+		ownerID = *body.OwnerID
+	} else {
+		ownerID, err = h.create.DefaultOwnerID(r.Context())
+		if err != nil {
+			Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
 	l, err := h.create.Execute(r.Context(), listing.CreateInput{
 		SellerID:  user.ID,
 		VariantID: body.VariantID,
+		OwnerID:   ownerID,
 		Quantity:  body.Quantity,
 		PriceUSD:  body.PriceUSD,
 		Language:  body.Language,

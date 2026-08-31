@@ -12,6 +12,7 @@ type Listing struct {
 	ID        int64
 	SellerID  int64
 	VariantID int64
+	OwnerID   int64
 	GameID    int64
 	GameName  string
 	// Datos de la carta para el inventario legible (JOIN con cards/expansions).
@@ -19,6 +20,7 @@ type Listing struct {
 	CardImage     string
 	ExpansionName string
 	VariantName   string
+	OwnerName     string
 	Quantity      int
 	PriceUSD      float64
 	PriceCOP      float64
@@ -31,6 +33,7 @@ type Listing struct {
 type CreateInput struct {
 	SellerID  int64
 	VariantID int64
+	OwnerID   int64
 	Quantity  int
 	PriceUSD  float64
 	// PriceCOP se calcula con la TRM del día antes de persistir.

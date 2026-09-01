@@ -21,6 +21,9 @@ type Listing struct {
 	ExpansionName string
 	VariantName   string
 	OwnerName     string
+	// SellerName es el nombre del usuario que creó/administra el listing
+	// (JOIN con users por seller_id).
+	SellerName string
 	Quantity      int
 	PriceUSD      float64
 	PriceCOP      float64

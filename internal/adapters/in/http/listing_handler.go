@@ -28,6 +28,7 @@ func NewListingHandler(
 type listingResponse struct {
 	ID            int64   `json:"ID"`
 	SellerID      int64   `json:"SellerID"`
+	SellerName    string  `json:"SellerName"`
 	VariantID     int64   `json:"VariantID"`
 	OwnerID       int64   `json:"OwnerID"`
 	OwnerName     string  `json:"OwnerName"`
@@ -57,6 +58,7 @@ func newListingResponse(l listing.Listing) listingResponse {
 	return listingResponse{
 		ID:            l.ID,
 		SellerID:      l.SellerID,
+		SellerName:    l.SellerName,
 		VariantID:     l.VariantID,
 		OwnerID:       l.OwnerID,
 		OwnerName:     l.OwnerName,
@@ -75,7 +77,8 @@ func newListingResponse(l listing.Listing) listingResponse {
 	}
 }
 
-// List devuelve los listings del usuario autenticado.
+// List devuelve los listings. Los administradores ven el listing general de
+// todos los vendedores; el resto solo los propios del usuario autenticado.
 //
 //	@Summary      Listar listings
 //	@Tags         listings
@@ -97,7 +100,7 @@ func (h *ListingHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
-	listings, err := h.list.Execute(r.Context(), user.ID, limit, offset)
+	listings, err := h.list.Execute(r.Context(), user.Role, user.ID, limit, offset)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "error interno del servidor")
 		return

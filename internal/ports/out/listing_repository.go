@@ -8,6 +8,9 @@ import (
 type ListingRepository interface {
 	Create(ctx context.Context, input listing.CreateInput) (listing.Listing, error)
 	ListBySeller(ctx context.Context, sellerID int64, limit, offset int) ([]listing.Listing, error)
+	// ListAll devuelve el inventario general de todos los vendedores; se usa
+	// para que los administradores vean el listing completo.
+	ListAll(ctx context.Context, limit, offset int) ([]listing.Listing, error)
 	UpdateQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error)
 	// FindBySellerAndVariantLanguageOwner devuelve el listing vigente (active o
 	// inactive) del vendedor para una variante con el mismo idioma y propietario,

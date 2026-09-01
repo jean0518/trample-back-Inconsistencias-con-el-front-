@@ -18,17 +18,65 @@ func NewListingRepository(db *pgxpool.Pool) *ListingRepository {
 	return &ListingRepository{db: db}
 }
 
+// inventoryListingSelect reúne las columnas de un listing legible para el inventario
+// (JOINs con cards/expansions/owners/users). Las columnas se deben escanear en
+// el mismo orden que scanListingRows.
+const inventoryListingSelect = `
+	SELECT
+		il.id, il.seller_id, il.variant_id, il.owner_id,
+		g.id AS game_id, g.name AS game_name,
+		c.name AS card_name,
+		COALESCE(
+			(SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),
+			(SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
+			''
+		) AS card_image,
+		e.name AS expansion_name,
+		cv.variant_name,
+		COALESCE(o.name, 'trampleStore') AS owner_name,
+		COALESCE(u.first_name || ' ' || u.last_name, '') AS seller_name,
+		il.quantity, il.price_usd, il.price_cop,
+		il.status, il.language, il.created_at, il.updated_at
+	FROM inventory_listings il
+	JOIN card_variants cv ON cv.id = il.variant_id
+	JOIN cards c ON c.id = cv.card_id
+	JOIN games g ON g.id = c.game_id
+	JOIN expansions e ON e.id = c.expansion_id
+	LEFT JOIN owners o ON o.id = il.owner_id
+	LEFT JOIN users u ON u.id = il.seller_id
+`
+
+func scanListingRows(rows pgx.Rows) ([]listing.Listing, error) {
+	var listings []listing.Listing
+	for rows.Next() {
+		var l listing.Listing
+		if err := rows.Scan(
+			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
+			&l.GameID, &l.GameName,
+			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
+			&l.OwnerName, &l.SellerName,
+			&l.Quantity, &l.PriceUSD, &l.PriceCOP,
+			&l.Status, &l.Language, &l.CreatedAt, &l.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("escanear listing: %w", err)
+		}
+		listings = append(listings, l)
+	}
+	return listings, rows.Err()
+}
+
 func (r *ListingRepository) Create(ctx context.Context, input listing.CreateInput) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO inventory_listings (seller_id, variant_id, owner_id, quantity, price_usd, price_cop, language)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
 	`, input.SellerID, input.VariantID, input.OwnerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language,
 	).Scan(
 		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
-		&l.CreatedAt, &l.UpdatedAt,
+		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
 	)
 	if err != nil {
 		return listing.Listing{}, fmt.Errorf("crear listing: %w", err)
@@ -38,26 +86,7 @@ func (r *ListingRepository) Create(ctx context.Context, input listing.CreateInpu
 
 func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, limit, offset int) ([]listing.Listing, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT
-			il.id, il.seller_id, il.variant_id, il.owner_id,
-			g.id AS game_id, g.name AS game_name,
-			c.name AS card_name,
-			COALESCE(
-				(SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),
-				(SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
-				''
-			) AS card_image,
-			e.name AS expansion_name,
-			cv.variant_name,
-			COALESCE(o.name, 'trampleStore') AS owner_name,
-			il.quantity, il.price_usd, il.price_cop,
-			il.status, il.language, il.created_at, il.updated_at
-		FROM inventory_listings il
-		JOIN card_variants cv ON cv.id = il.variant_id
-		JOIN cards c ON c.id = cv.card_id
-		JOIN games g ON g.id = c.game_id
-		JOIN expansions e ON e.id = c.expansion_id
-		LEFT JOIN owners o ON o.id = il.owner_id
+		`+inventoryListingSelect+`
 		WHERE il.seller_id = $1
 		ORDER BY il.created_at DESC
 		LIMIT $2 OFFSET $3
@@ -67,22 +96,21 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 	}
 	defer rows.Close()
 
-	var listings []listing.Listing
-	for rows.Next() {
-		var l listing.Listing
-		if err := rows.Scan(
-			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
-			&l.GameID, &l.GameName,
-			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
-			&l.OwnerName,
-			&l.Quantity, &l.PriceUSD, &l.PriceCOP,
-			&l.Status, &l.Language, &l.CreatedAt, &l.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("escanear listing: %w", err)
-		}
-		listings = append(listings, l)
+	return scanListingRows(rows)
+}
+
+func (r *ListingRepository) ListAll(ctx context.Context, limit, offset int) ([]listing.Listing, error) {
+	rows, err := r.db.Query(ctx, `
+		`+inventoryListingSelect+`
+		ORDER BY il.created_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listar inventory_listings general: %w", err)
 	}
-	return listings, rows.Err()
+	defer rows.Close()
+
+	return scanListingRows(rows)
 }
 
 // UpdateQuantity cambia la cantidad y ajusta el estado automáticamente:
@@ -100,12 +128,13 @@ func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.Up
 		    END,
 		    updated_at = now()
 		WHERE id = $1 AND seller_id = $2
-		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
 	`, input.ID, input.SellerID, input.Quantity,
 	).Scan(
 		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
-		&l.CreatedAt, &l.UpdatedAt,
+		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -152,12 +181,13 @@ func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.Updat
 		    status = CASE WHEN status = 'inactive' THEN 'active' ELSE status END,
 		    updated_at = now()
 		WHERE id = $1 AND seller_id = $2
-		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
 	`, input.ID, input.SellerID, input.Quantity,
 	).Scan(
 		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
-		&l.CreatedAt, &l.UpdatedAt,
+		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

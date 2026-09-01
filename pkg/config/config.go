@@ -3,18 +3,19 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	ScrydexAPIKey string
-	ScrydexTeamID string
-	JWTSecret     string
-	FrontendURL   string
-	Env           string
+	Port           string
+	DatabaseURL    string
+	ScrydexAPIKey  string
+	ScrydexTeamID  string
+	JWTSecret      string
+	AllowedOrigins []string
+	Env            string
 }
 
 func Load() (*Config, error) {
@@ -37,14 +38,20 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	rawOrigins := envOr("ALLOWED_ORIGINS", "http://localhost:5173")
+	origins := strings.Split(rawOrigins, ",")
+	for i, o := range origins {
+		origins[i] = strings.TrimSpace(o)
+	}
+
 	return &Config{
-		Port:          envOr("PORT", "8080"),
-		DatabaseURL:   dbURL,
-		ScrydexAPIKey: scrydexKey,
-		ScrydexTeamID: scrydexTeam,
-		JWTSecret:     jwtSecret,
-		FrontendURL:   envOr("FRONTEND_URL", "http://localhost:5173"),
-		Env:           envOr("ENV", "development"),
+		Port:           envOr("PORT", "8080"),
+		DatabaseURL:    dbURL,
+		ScrydexAPIKey:  scrydexKey,
+		ScrydexTeamID:  scrydexTeam,
+		JWTSecret:      jwtSecret,
+		AllowedOrigins: origins,
+		Env:            envOr("ENV", "development"),
 	}, nil
 }
 

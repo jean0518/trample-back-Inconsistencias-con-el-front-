@@ -18,11 +18,12 @@ type Handlers struct {
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
 	Listings       *ListingHandler
+
 	Owners         *OwnerHandler
 	Cart           *CartHandler
 	Sales          *SaleHandler
 	AuthMiddleware *AuthMiddleware
-	FrontendURL    string
+	AllowedOrigins []string
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
@@ -37,11 +38,15 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func corsMiddleware(allowedOrigin string) func(http.Handler) http.Handler {
+func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		allowed[o] = struct{}{}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin == allowedOrigin {
+			if _, ok := allowed[origin]; ok {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 			}
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -62,7 +67,7 @@ func NewRouter(h Handlers) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(securityHeadersMiddleware)
-	r.Use(corsMiddleware(h.FrontendURL))
+	r.Use(corsMiddleware(h.AllowedOrigins))
 	r.Use(httprate.LimitByIP(100, time.Minute))
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

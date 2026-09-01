@@ -99,7 +99,7 @@ func main() {
 		Cart:           httpadapter.NewCartHandler(cartUC),
 		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
 		AuthMiddleware: authMiddleware,
-		FrontendURL:    cfg.FrontendURL,
+		AllowedOrigins: cfg.AllowedOrigins,
 	})
 
 	srv := &http.Server{

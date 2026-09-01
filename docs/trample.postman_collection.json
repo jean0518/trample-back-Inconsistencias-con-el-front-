@@ -4,8 +4,14 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url", "value": "http://localhost:8080" },
-    { "key": "token",    "value": "" }
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -28,7 +34,12 @@
           "request": {
             "method": "POST",
             "url": "{{base_url}}/auth/register",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"first_name\": \"Juan\",\n  \"last_name\": \"Perez\"\n}"
@@ -40,7 +51,12 @@
           "request": {
             "method": "POST",
             "url": "{{base_url}}/auth/login",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\"\n}"
@@ -72,7 +88,12 @@
             "method": "GET",
             "url": {
               "raw": "{{base_url}}/expansions?game_id=1",
-              "query": [{ "key": "game_id", "value": "1" }]
+              "query": [
+                {
+                  "key": "game_id",
+                  "value": "1"
+                }
+              ]
             }
           }
         },
@@ -97,11 +118,28 @@
             "url": {
               "raw": "{{base_url}}/catalog/cards?game_code=pokemon&expansion_id=&name=&page=1&page_size=20",
               "query": [
-                { "key": "game_code",    "value": "pokemon" },
-                { "key": "expansion_id", "value": "",       "disabled": true },
-                { "key": "name",         "value": "",       "disabled": true },
-                { "key": "page",         "value": "1" },
-                { "key": "page_size",    "value": "20" }
+                {
+                  "key": "game_code",
+                  "value": "pokemon"
+                },
+                {
+                  "key": "expansion_id",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "name",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                }
               ]
             }
           }
@@ -117,8 +155,14 @@
             "method": "POST",
             "url": "{{base_url}}/scrydex/pokemon/cards",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -130,18 +174,28 @@
           "name": "PokÃ©mon â€” Obtener carta por ID externo",
           "request": {
             "method": "POST",
-            "url": "{{base_url}}/scrydex/pokemon/cards/:id",
+            "url": {
+              "raw": "{{base_url}}/scrydex/pokemon/cards/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "sv8-54"
+                }
+              ]
+            },
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"variants\": []\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/scrydex/pokemon/cards/:id",
-              "variable": [{ "key": "id", "value": "sv8-54" }]
             }
           }
         },
@@ -151,8 +205,14 @@
             "method": "POST",
             "url": "{{base_url}}/scrydex/magic/cards",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -166,11 +226,22 @@
             "method": "POST",
             "url": {
               "raw": "{{base_url}}/scrydex/magic/cards/:id",
-              "variable": [{ "key": "id", "value": "abc-123" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "abc-123"
+                }
+              ]
             },
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -183,7 +254,12 @@
           "request": {
             "method": "POST",
             "url": "{{base_url}}/scrydex/riftbound/cards",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"fire\",\n  \"expansion_code\": \"\"\n}"
@@ -196,9 +272,19 @@
             "method": "POST",
             "url": {
               "raw": "{{base_url}}/scrydex/riftbound/cards/:id",
-              "variable": [{ "key": "id", "value": "rb-001" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "rb-001"
+                }
+              ]
             },
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"variants\": []\n}"
@@ -216,8 +302,14 @@
             "method": "POST",
             "url": "{{base_url}}/admin/cards/import",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -230,7 +322,12 @@
           "request": {
             "method": "POST",
             "url": "{{base_url}}/admin/pokemon/expansions/sync",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -239,8 +336,14 @@
             "method": "POST",
             "url": "{{base_url}}/admin/pokemon/cards/import",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -254,9 +357,19 @@
             "method": "PUT",
             "url": {
               "raw": "{{base_url}}/admin/pokemon/cards/:id",
-              "variable": [{ "key": "id", "value": "1" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -265,9 +378,19 @@
             "method": "DELETE",
             "url": {
               "raw": "{{base_url}}/admin/pokemon/cards/:id",
-              "variable": [{ "key": "id", "value": "1" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -275,7 +398,12 @@
           "request": {
             "method": "POST",
             "url": "{{base_url}}/admin/magic/expansions/sync",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -284,8 +412,14 @@
             "method": "POST",
             "url": "{{base_url}}/admin/magic/cards/import",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -299,9 +433,19 @@
             "method": "PUT",
             "url": {
               "raw": "{{base_url}}/admin/magic/cards/:id",
-              "variable": [{ "key": "id", "value": "1" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -310,9 +454,19 @@
             "method": "DELETE",
             "url": {
               "raw": "{{base_url}}/admin/magic/cards/:id",
-              "variable": [{ "key": "id", "value": "1" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         }
       ]
@@ -327,11 +481,22 @@
             "url": {
               "raw": "{{base_url}}/listings?limit=50&offset=0",
               "query": [
-                { "key": "limit",  "value": "50" },
-                { "key": "offset", "value": "0" }
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
               ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         },
         {
@@ -340,8 +505,14 @@
             "method": "POST",
             "url": "{{base_url}}/listings",
             "header": [
-              { "key": "Content-Type",  "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -355,9 +526,130 @@
             "method": "DELETE",
             "url": {
               "raw": "{{base_url}}/listings/:id",
-              "variable": [{ "key": "id", "value": "1" }]
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cart",
+      "item": [
+        {
+          "name": "Ver carrito",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/cart",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Agregar al carrito",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/cart",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": 1,\n  \"language\": \"Inglés\",\n  \"quantity\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Eliminar del carrito",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/cart/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sales",
+      "item": [
+        {
+          "name": "Confirmar venta",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/sales",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservation_ids\": [1, 2],\n  \"fulfillment\": \"shipping\",\n  \"address\": \"Calle 123\",\n  \"city\": \"Bogotá\",\n  \"phone\": \"3001234567\",\n  \"payment_method\": \"transferencia\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Listar ventas / historial",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/sales?limit=50&offset=0",
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
           }
         }
       ]

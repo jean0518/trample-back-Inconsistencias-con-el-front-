@@ -19,6 +19,8 @@ type Handlers struct {
 	Riftbound      *RiftboundHandler
 	Listings       *ListingHandler
 	Owners         *OwnerHandler
+	Cart           *CartHandler
+	Sales          *SaleHandler
 	AuthMiddleware *AuthMiddleware
 	FrontendURL    string
 }
@@ -120,6 +122,21 @@ func NewRouter(h Handlers) http.Handler {
 		r.Delete("/{id}", h.Listings.Delete)
 	})
 
+	// Cart — stock temporal de 5 minutos al agregar al carrito
+	r.Route("/cart", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Get("/", h.Cart.GetCart)
+		r.Post("/", h.Cart.AddToCart)
+		r.Delete("/{id}", h.Cart.RemoveFromCart)
+	})
+
+	// Sales — registro local de ventas/pedidos e historial
+	r.Route("/sales", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Post("/", h.Sales.ConfirmSale)
+		r.Get("/", h.Sales.ListSales)
+	})
+
 	// Admin — sincronización e importación (solo usuarios con rol "admin")
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
@@ -130,6 +147,8 @@ func NewRouter(h Handlers) http.Handler {
 			r.Post("/", h.Owners.Create)
 			r.Delete("/{id}", h.Owners.Delete)
 		})
+		r.Get("/reservation-logs", h.Cart.ListReservationLogs)
+		r.Get("/sales-stats", h.Sales.SalesStats)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)

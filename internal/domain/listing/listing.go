@@ -42,8 +42,8 @@ type CreateInput struct {
 }
 
 // UpdateStockInput modifica la cantidad de un listing. La regla de estado es
-// automática: quantity 0 ⇒ 'inactive'; volver a subir stock ⇒ 'active'
-// (el estado 'sold' nunca se cambia automáticamente).
+// automática: quantity 0 ⇒ 'inactive'; volver a subir stock ⇒ 'active'.
+// Los listings solo manejan los estados 'active' o 'inactive'.
 type UpdateStockInput struct {
 	ID       int64
 	SellerID int64

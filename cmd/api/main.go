@@ -26,6 +26,8 @@ import (
 	appCatalog "trample-back/internal/application/catalog"
 	appListing "trample-back/internal/application/listing"
 	appOwner "trample-back/internal/application/owner"
+	appReservation "trample-back/internal/application/reservation"
+	appSale "trample-back/internal/application/sale"
 	"trample-back/pkg/config"
 	"trample-back/pkg/db"
 	"trample-back/pkg/logger"
@@ -58,6 +60,8 @@ func main() {
 	gameRepo := postgres.NewGameRepository(pool)
 	listingRepo := postgres.NewListingRepository(pool)
 	ownerRepo := postgres.NewOwnerRepository(pool)
+	reservationRepo := postgres.NewReservationRepository(pool)
+	saleRepo := postgres.NewSaleRepository(pool)
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
@@ -75,6 +79,10 @@ func main() {
 	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
 	listOwnersUC := appOwner.NewListOwnersUseCase(ownerRepo)
 	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
+	cartUC := appReservation.NewCartUseCase(reservationRepo)
+	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
+	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
+	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
 
 	// Router
 	secureCookie := cfg.Env == "production"
@@ -88,6 +96,8 @@ func main() {
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, listOwnersUC, deleteOwnerUC),
+		Cart:           httpadapter.NewCartHandler(cartUC),
+		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
 		AuthMiddleware: authMiddleware,
 		FrontendURL:    cfg.FrontendURL,
 	})
@@ -103,6 +113,9 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	// Libera periódicamente las reservas (stock temporal de 5 min) vencidas.
+	go releaseExpiredLoop(log, reservationRepo)
+
 	go func() {
 		log.Info("server starting", slog.String("port", cfg.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -117,4 +130,23 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+}
+
+// releaseExpiredLoop libera en un ciclo las reservas de carrito vencidas
+// (5 minutos) restaurando el stock al inventario.
+func releaseExpiredLoop(log *slog.Logger, repo *postgres.ReservationRepository) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		n, err := repo.ReleaseExpired(ctx)
+		cancel()
+		if err != nil {
+			log.Error("liberar reservas expiradas", slog.Any("error", err))
+			continue
+		}
+		if n > 0 {
+			log.Info("reservas expiradas liberadas", slog.Int64("count", n))
+		}
+	}
 }

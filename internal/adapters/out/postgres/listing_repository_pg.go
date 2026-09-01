@@ -87,7 +87,7 @@ func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, li
 
 // UpdateQuantity cambia la cantidad y ajusta el estado automáticamente:
 // quantity 0 ⇒ 'inactive'; quantity > 0 reactiva un listing 'inactive'.
-// El estado 'sold' nunca se modifica desde aquí.
+// Los listings solo manejan los estados 'active' o 'inactive'.
 func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
@@ -116,15 +116,15 @@ func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.Up
 	return l, nil
 }
 
-// FindBySellerAndVariantLanguageOwner devuelve el listing vigente (no 'sold')
-// del vendedor para una variante con el mismo idioma y propietario. Se usa al
-// importar para decidir si sumar stock o crear un listing nuevo.
+// FindBySellerAndVariantLanguageOwner devuelve el listing vigente (active o
+// inactive) del vendedor para una variante con el mismo idioma y propietario.
+// Se usa al importar para decidir si sumar stock o crear un listing nuevo.
 func (r *ListingRepository) FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID, variantID int64, language string, ownerID int64) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
 		SELECT id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
 		FROM inventory_listings
-		WHERE seller_id = $1 AND variant_id = $2 AND language = $3 AND owner_id = $4 AND status <> 'sold'
+		WHERE seller_id = $1 AND variant_id = $2 AND language = $3 AND owner_id = $4
 		ORDER BY updated_at DESC
 		LIMIT 1
 	`, sellerID, variantID, language, ownerID,
@@ -143,7 +143,7 @@ func (r *ListingRepository) FindBySellerAndVariantLanguageOwner(ctx context.Cont
 }
 
 // AddQuantity suma cantidad al listing y reactiva un 'inactive'
-// (la cantidad a sumar siempre es > 0). Nunca toca un 'sold'.
+// (la cantidad a sumar siempre es > 0).
 func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
@@ -151,7 +151,7 @@ func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.Updat
 		SET quantity = quantity + $3,
 		    status = CASE WHEN status = 'inactive' THEN 'active' ELSE status END,
 		    updated_at = now()
-		WHERE id = $1 AND seller_id = $2 AND status <> 'sold'
+		WHERE id = $1 AND seller_id = $2
 		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
 	`, input.ID, input.SellerID, input.Quantity,
 	).Scan(

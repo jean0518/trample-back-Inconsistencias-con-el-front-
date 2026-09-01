@@ -100,7 +100,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	h.setAuthCookie(w, token)
 	JSON(w, http.StatusCreated, map[string]any{
-		"user": newAuthUserResponse(user),
+		"token": token,
+		"user":  newAuthUserResponse(user),
 	})
 }
 
@@ -125,7 +126,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	h.setAuthCookie(w, result.Token)
 	JSON(w, http.StatusOK, map[string]any{
-		"user": newAuthUserResponse(result.User),
+		"token": result.Token,
+		"user":  newAuthUserResponse(result.User),
 	})
 }
 

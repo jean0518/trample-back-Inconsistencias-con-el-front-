@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 
@@ -284,6 +285,44 @@ func (r *CardRepository) GetExternalID(ctx context.Context, id int64) (string, e
 		return "", fmt.Errorf("carta %d no encontrada: %w", id, err)
 	}
 	return externalID, nil
+}
+
+// ListStaleCards devuelve cartas con al menos un listing activo cuyo precio
+// (el mínimo entre sus variantes) no se consulta en Scrydex hace más de
+// olderThan, o nunca se consultó. Las más desactualizadas primero.
+func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Duration, limit int) ([]out.StaleCardRef, error) {
+	threshold := time.Now().Add(-olderThan)
+	rows, err := r.db.Query(ctx, `
+		SELECT c.id, g.code, c.external_id
+		FROM cards c
+		JOIN games g ON g.id = c.game_id
+		JOIN card_variants cv ON cv.card_id = c.id
+		WHERE EXISTS (
+			SELECT 1 FROM inventory_listings il
+			WHERE il.variant_id = cv.id AND il.status = 'active' AND il.quantity > 0
+		)
+		GROUP BY c.id, g.code, c.external_id
+		HAVING MIN(cv.last_price_check_at) IS NULL OR MIN(cv.last_price_check_at) < $1
+		ORDER BY MIN(cv.last_price_check_at) ASC NULLS FIRST
+		LIMIT $2
+	`, threshold, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listar cartas con precio desactualizado: %w", err)
+	}
+	defer rows.Close()
+
+	var result []out.StaleCardRef
+	for rows.Next() {
+		var ref out.StaleCardRef
+		if err := rows.Scan(&ref.ID, &ref.GameCode, &ref.ExternalID); err != nil {
+			return nil, err
+		}
+		result = append(result, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *CardRepository) DeleteCard(ctx context.Context, id int64) error {

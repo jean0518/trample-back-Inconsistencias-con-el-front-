@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"fmt"
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 )
@@ -40,12 +39,5 @@ func (uc *ImportCardUseCase) refreshByGame(ctx context.Context, gameCode string,
 	if err != nil {
 		return nil, err
 	}
-	card, err := uc.search.FetchOne(ctx, gameCode, externalID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("re-fetch de scrydex: %w", err)
-	}
-	if err := uc.repo.SyncCard(ctx, gameCode, *card); err != nil {
-		return nil, fmt.Errorf("actualizar carta: %w", err)
-	}
-	return card, nil
+	return refreshCard(ctx, uc.search, uc.repo, gameCode, externalID)
 }

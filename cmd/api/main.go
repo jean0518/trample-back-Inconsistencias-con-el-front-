@@ -64,7 +64,8 @@ func main() {
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
 	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, ownerRepo, trmClient)
-	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
+	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)
+	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo, priceRefresherUC)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
@@ -103,6 +104,13 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	// Job de respaldo: refresca en lotes las cartas cuyo precio en Scrydex
+	// tiene más de una semana, para cubrir también las que nadie consulta
+	// (el refresco perezoso en ListCardsUseCase solo cubre cartas que se
+	// listan).
+	bgCtx, cancelBg := context.WithCancel(context.Background())
+	go runPriceRefreshJob(bgCtx, priceRefresherUC, log)
+
 	go func() {
 		log.Info("server starting", slog.String("port", cfg.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -113,8 +121,45 @@ func main() {
 
 	<-quit
 	log.Info("shutting down...")
+	cancelBg()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+}
+
+// runPriceRefreshJob es el respaldo periódico del refresco perezoso de
+// precios: cada tick busca cartas con más de una semana sin consultarse en
+// Scrydex y las actualiza en lotes hasta agotar el backlog.
+func runPriceRefreshJob(ctx context.Context, refresher *appCatalog.PriceRefresher, log *slog.Logger) {
+	const (
+		tick      = 6 * time.Hour
+		batchSize = 50
+	)
+
+	refreshUntilCaughtUp := func() {
+		for {
+			n, err := refresher.RefreshStaleBatch(ctx, appCatalog.PriceStaleAfter, batchSize)
+			if err != nil {
+				log.Error("job de refresco de precios falló", slog.Any("error", err))
+				return
+			}
+			if n < batchSize {
+				return
+			}
+		}
+	}
+
+	refreshUntilCaughtUp()
+
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshUntilCaughtUp()
+		}
+	}
 }

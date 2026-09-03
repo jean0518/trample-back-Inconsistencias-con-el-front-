@@ -32,6 +32,29 @@ func NewClient(apiKey, teamID string) *Client {
 	}
 }
 
+// stringOrSlice deserializes a JSON field that may be either a string or []string.
+type stringOrSlice []string
+
+func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	if data[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		*s = []string{str}
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*s = arr
+	return nil
+}
+
 // --- Scrydex JSON structs (reflejan el JSON real de la API) ---
 
 type scrydexEnvelope struct {
@@ -57,7 +80,7 @@ type scrydexCard struct {
 	FlavorText          string          `json:"flavor_text"`
 	ExpansionSortOrder  int              `json:"expansion_sort_order"`
 	NationalPokedexNums []int            `json:"national_pokedex_numbers"`
-	EvolvesFrom         []string         `json:"evolves_from"`
+	EvolvesFrom         stringOrSlice    `json:"evolves_from"`
 	Abilities           json.RawMessage  `json:"abilities"`
 	Attacks             json.RawMessage  `json:"attacks"`
 	Weaknesses          json.RawMessage  `json:"weaknesses"`

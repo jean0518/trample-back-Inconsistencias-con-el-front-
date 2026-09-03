@@ -214,7 +214,22 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 			}
 		}
 	}
+	if p.GameCode == "pokemon" {
+		cards = filterPocketCards(cards)
+	}
 	return cards, nil
+}
+
+// filterPocketCards descarta cartas cuya expansión pertenece a Pokémon TCG
+// Pocket (identificadas por el prefijo "tcgp-" en el ID de expansión).
+func filterPocketCards(cards []catalog.Card) []catalog.Card {
+	out := cards[:0]
+	for _, c := range cards {
+		if !strings.HasPrefix(c.Expansion.ExternalID, "tcgp-") {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (c *Client) searchOnce(ctx context.Context, gameCode, q string, variants []string) ([]catalog.Card, error) {

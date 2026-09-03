@@ -167,20 +167,35 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				'[]'
 			)::text,
 			COALESCE((
-				SELECT SUM(il.quantity)
+				SELECT GREATEST(SUM(il.quantity) - COALESCE(MAX(cr.reserved), 0), 0)
 				FROM inventory_listings il
 				JOIN card_variants lcv ON lcv.id = il.variant_id
+				LEFT JOIN LATERAL (
+					SELECT SUM(cr2.quantity)::int AS reserved
+					FROM cart_reservations cr2
+					JOIN inventory_listings crl ON crl.id = cr2.listing_id
+					JOIN card_variants crv ON crv.id = crl.variant_id
+					WHERE crv.card_id = c.id AND crl.language = il.language AND cr2.status = 'active'
+				) cr ON true
 				WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
 			), 0)::int AS stock,
 			COALESCE((
 				SELECT json_agg(l ORDER BY l.stock DESC)
 				FROM (
-					SELECT il.language AS name, SUM(il.quantity)::int AS stock
-					FROM inventory_listings il
-					JOIN card_variants lcv ON lcv.id = il.variant_id
-					WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
-					  AND il.language IS NOT NULL AND il.language <> ''
-					GROUP BY il.language
+				SELECT il.language AS name,
+				       GREATEST(SUM(il.quantity) - COALESCE(MAX(cr.reserved), 0), 0)::int AS stock
+				FROM inventory_listings il
+				JOIN card_variants lcv ON lcv.id = il.variant_id
+				LEFT JOIN LATERAL (
+					SELECT SUM(cr2.quantity)::int AS reserved
+					FROM cart_reservations cr2
+					JOIN inventory_listings crl ON crl.id = cr2.listing_id
+					JOIN card_variants crv ON crv.id = crl.variant_id
+					WHERE crv.card_id = c.id AND crl.language = il.language AND cr2.status = 'active'
+				) cr ON true
+				WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
+				  AND il.language IS NOT NULL AND il.language <> ''
+				GROUP BY il.language
 				) l
 			), '[]')::text AS languages,
 			COUNT(*) OVER() AS total

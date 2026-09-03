@@ -2,6 +2,7 @@ package out
 
 import (
 	"context"
+	"time"
 	"trample-back/internal/domain/catalog"
 )
 
@@ -16,6 +17,14 @@ type ListCardsParams struct {
 	PageSize    int
 }
 
+// StaleCardRef identifica una carta cuyo precio no se consulta en Scrydex
+// hace más de un umbral dado (o nunca se consultó).
+type StaleCardRef struct {
+	ID         int64
+	GameCode   string
+	ExternalID string
+}
+
 type CardRepository interface {
 	SyncCard(ctx context.Context, gameCode string, card catalog.Card) error
 	// GetVariantID devuelve el ID de la variante persistida de una carta
@@ -25,4 +34,7 @@ type CardRepository interface {
 	GetExternalID(ctx context.Context, id int64) (externalID string, err error)
 	DeleteCard(ctx context.Context, id int64) error
 	ListCards(ctx context.Context, p ListCardsParams) ([]catalog.CardSummary, int, error)
+	// ListStaleCards devuelve cartas con inventario activo cuyo precio no se
+	// actualiza hace más de olderThan (o nunca), las más viejas primero.
+	ListStaleCards(ctx context.Context, olderThan time.Duration, limit int) ([]StaleCardRef, error)
 }

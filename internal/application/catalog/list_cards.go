@@ -7,11 +7,14 @@ import (
 )
 
 type ListCardsUseCase struct {
-	repo out.CardRepository
+	repo      out.CardRepository
+	refresher *PriceRefresher
 }
 
-func NewListCardsUseCase(repo out.CardRepository) *ListCardsUseCase {
-	return &ListCardsUseCase{repo: repo}
+// refresher es opcional: si es nil, listar cartas no dispara refrescos
+// perezosos de precio (útil en tests).
+func NewListCardsUseCase(repo out.CardRepository, refresher *PriceRefresher) *ListCardsUseCase {
+	return &ListCardsUseCase{repo: repo, refresher: refresher}
 }
 
 type ListCardsResult struct {
@@ -38,6 +41,9 @@ func (uc *ListCardsUseCase) List(ctx context.Context, p out.ListCardsParams) (Li
 	}
 	if cards == nil {
 		cards = []catalog.CardSummary{}
+	}
+	if uc.refresher != nil {
+		uc.refresher.TriggerLazy(ctx)
 	}
 	return ListCardsResult{
 		Cards:    cards,

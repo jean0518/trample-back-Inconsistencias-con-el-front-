@@ -69,6 +69,9 @@ func (uc *SearchScrydex) FetchOne(ctx context.Context, gameCode, externalID stri
 	if err != nil {
 		return nil, err
 	}
+	if gameCode == "pokemon" && card.Expansion.Series == "Pokémon Pocket" {
+		return nil, fmt.Errorf("las cartas de Pokémon TCG Pocket no están soportadas")
+	}
 	cards, err := uc.applyTRM(ctx, []catalog.Card{*card})
 	if err != nil {
 		return nil, err

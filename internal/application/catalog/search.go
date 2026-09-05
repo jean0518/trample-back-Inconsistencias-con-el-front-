@@ -13,7 +13,7 @@ import (
 	"trample-back/internal/ports/out"
 )
 
-const searchCacheTTL = 15 * time.Minute
+const searchCacheTTL = 2 * time.Hour
 
 type SearchScrydex struct {
 	scrydex out.ScrydexClient
@@ -101,6 +101,9 @@ func (uc *SearchScrydex) get(id string) (cachedSearch, bool) {
 		delete(uc.cache, id)
 		return cachedSearch{}, false
 	}
+	// Sliding window: renovar TTL en cada acceso.
+	c.Expires = time.Now().Add(searchCacheTTL)
+	uc.cache[id] = c
 	return c, true
 }
 

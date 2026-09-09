@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
@@ -12,14 +13,17 @@ import (
 )
 
 // ListingItem son los datos de publicación (inventario) para una carta
-// seleccionada. Si PriceUSD no se envía, se usa el precio de mercado NM de la
-// variante por defecto; si Language no viene, se usa "Inglés".
+// seleccionada. VariantName indica el acabado a publicar (Normal, Foil, etc.);
+// si no se envía, se usa la variante por defecto. Si PriceUSD no se envía, se
+// usa el precio de mercado NM de la variante elegida; si Language no viene, se
+// usa "Inglés".
 type ListingItem struct {
-	ExternalID string   `json:"external_id"`
-	Quantity   int      `json:"quantity"`
-	PriceUSD   *float64 `json:"price_usd,omitempty"`
-	Language   string   `json:"language,omitempty"`
-	OwnerID    *int64   `json:"owner_id,omitempty"`
+	ExternalID  string   `json:"external_id"`
+	VariantName string   `json:"variant_name,omitempty"`
+	Quantity    int      `json:"quantity"`
+	PriceUSD    *float64 `json:"price_usd,omitempty"`
+	Language    string   `json:"language,omitempty"`
+	OwnerID     *int64   `json:"owner_id,omitempty"`
 }
 
 // ImportListingGroup agrupa los items que provienen de una misma búsqueda.
@@ -45,13 +49,36 @@ type ImportedListing struct {
 	Merged      bool    `json:"merged"`
 }
 
-// defaultVariant es la variante con la que se publica el listing en v1:
-// la primera que devuelve Scrydex para la carta (normalmente la estándar).
+// defaultVariant es la variente usada cuando el admin no especifica un
+// acabado: la primera que devuelve Scrydex para la carta (normalmente la
+// estándar).
 func defaultVariant(card catalog.Card) (catalog.Variant, error) {
 	if len(card.Variants) == 0 {
 		return catalog.Variant{}, fmt.Errorf("la carta %q no tiene variantes disponibles", card.Name)
 	}
 	return card.Variants[0], nil
+}
+
+// resolveVariant elige la variante de la carta solicitada por nombre
+// (insensible a mayúsculas). Si variantName viene vacío, usa la variante por
+// defecto.
+func resolveVariant(card catalog.Card, variantName string) (catalog.Variant, error) {
+	if variantName == "" {
+		return defaultVariant(card)
+	}
+	for _, v := range card.Variants {
+		if strings.EqualFold(v.Name, variantName) {
+			return v, nil
+		}
+	}
+	names := make([]string, 0, len(card.Variants))
+	for _, v := range card.Variants {
+		names = append(names, v.Name)
+	}
+	return catalog.Variant{}, fmt.Errorf(
+		"la carta %q no tiene la variante %q (disponibles: %s)",
+		card.Name, variantName, strings.Join(names, ", "),
+	)
 }
 
 // ImportListingUseCase importa cartas seleccionadas al catálogo y crea sus
@@ -121,16 +148,19 @@ func (uc *ImportListingUseCase) Execute(
 			if item.Quantity < 1 {
 				return nil, fmt.Errorf("la cantidad debe ser al menos 1 para %q", card.Name)
 			}
-			key := cached.GameCode + ":" + card.ExternalID
+
+			variant, err := resolveVariant(card, item.VariantName)
+			if err != nil {
+				return nil, err
+			}
+			// Una carta puede publicarse varias veces en el mismo request si
+			// el acabado difiere (p. ej. Normal y Foil).
+			key := cached.GameCode + ":" + card.ExternalID + ":" + variant.Name
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
 
-			variant, err := defaultVariant(card)
-			if err != nil {
-				return nil, err
-			}
 			priceUSD, priceCOP, err := resolvePrice(item.PriceUSD, variant, rate, card.Name)
 			if err != nil {
 				return nil, err

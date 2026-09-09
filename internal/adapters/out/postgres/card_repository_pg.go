@@ -137,7 +137,28 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
 	offset := (p.Page - 1) * p.PageSize
-	rows, err := r.db.Query(ctx, `
+
+	// display_price: menor precio NM con valor positivo en COP entre las
+	// variantes de la carta. Se usa para el filtro max_price y el orden.
+	displayPrice := `
+			COALESCE((
+				SELECT MIN(vp_p.price_cop)
+				FROM card_variants cv_p
+				JOIN variant_prices vp_p ON vp_p.variant_id = cv_p.id AND vp_p.condition = 'near_mint'
+				WHERE cv_p.card_id = c.id AND vp_p.price_cop > 0
+			), 0)::bigint`
+
+	orderBy := "e.release_date DESC, c.id"
+	switch p.Sort {
+	case "price-asc":
+		orderBy = displayPrice + " ASC, c.id"
+	case "price-desc":
+		orderBy = displayPrice + " DESC, c.id"
+	case "name":
+		orderBy = "c.name ASC, c.id"
+	}
+
+	query := fmt.Sprintf(`
 		SELECT
 			c.id,
 			c.external_id,
@@ -155,6 +176,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			COALESCE((SELECT ci.small_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.medium_url FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.large_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
+			%s AS display_price,
 			COALESCE(
 				(SELECT json_agg(json_build_object(
 					'name',      cv.variant_name,
@@ -213,7 +235,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		) il_owner ON true
 		WHERE ($1::text   = '' OR g.code          = $1)
 		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
-		  AND ($3::text   = '' OR c.name ILIKE '%' || $3 || '%')
+		  AND ($3::text   = '' OR c.name ILIKE '%%' || $3 || '%%')
 		  AND ($6::text   = '' OR c.rarity      = $6)
 		  AND ($7::bigint = 0  OR EXISTS (
 			SELECT 1 FROM inventory_listings il2
@@ -225,6 +247,8 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			JOIN card_variants lcv3 ON lcv3.id = il3.variant_id
 			WHERE lcv3.card_id = c.id AND il3.language = $8 AND il3.status = 'active' AND il3.quantity > 0
 		  ))
+		  AND ($9::bigint = 0 OR %s <= $9)
+		  AND ($10::bigint = 0 OR c.id = $10)
 		  AND NOT (g.code = 'pokemon' AND e.series = 'Pokémon Pocket')
 		  -- El catálogo público refleja el inventario: solo cartas con
 		  -- al menos un listing activo y con stock.
@@ -234,9 +258,10 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			JOIN card_variants lcv ON lcv.id = il.variant_id
 			WHERE lcv.card_id = c.id AND il.status = 'active' AND il.quantity > 0
 		  )
-		ORDER BY e.release_date DESC, c.id
+		ORDER BY %s
 		LIMIT $4 OFFSET $5
-	`, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity, p.OwnerID, p.Language)
+	`, displayPrice, displayPrice, orderBy)
+	rows, err := r.db.Query(ctx, query, p.GameCode, p.ExpansionID, p.Name, p.PageSize, offset, p.Rarity, p.OwnerID, p.Language, p.MaxPrice, p.CardID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listar cartas: %w", err)
 	}
@@ -251,6 +276,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		s            catalog.CardSummary
 		variantsJSON string
 		languagesJSON string
+		displayPrice int64
 	)
 	if err := rows.Scan(
 		&s.ID, &s.ExternalID, &s.Language, &s.OwnerName,
@@ -258,6 +284,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
 		&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
 		&s.Image.Small, &s.Image.Medium, &s.Image.Large,
+		&displayPrice,
 		&variantsJSON,
 		&s.Stock,
 		&languagesJSON,

@@ -13,6 +13,9 @@ type ListCardsParams struct {
 	Rarity      string
 	OwnerID     int64
 	Language    string
+	MaxPrice    int64
+	Sort        string
+	CardID      int64
 	Page        int
 	PageSize    int
 }

@@ -107,6 +107,7 @@ func NewRouter(h Handlers) http.Handler {
 	// Catalog — consultas a la DB local
 	r.Route("/catalog", func(r chi.Router) {
 		r.Get("/cards", h.Catalog.ListCards)
+		r.Get("/cards/{id}", h.Catalog.GetCard)
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Get("/expansions", h.Pokemon.ListExpansions)
 		})

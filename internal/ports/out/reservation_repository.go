@@ -31,8 +31,9 @@ type ReservationRepository interface {
 	// reservas activas) de una carta en un idioma concreto.
 	AvailableStock(ctx context.Context, cardID int64, language string) (int, error)
 	// FindListingForReserve devuelve el listing activo más adecuado para
-	// reservar de una carta/idioma.
-	FindListingForReserve(ctx context.Context, cardID int64, language string) (reservation.ListingInfo, error)
+	// reservar de una carta/idioma, opcionalmente filtrando por acabado
+	// (variantName).
+	FindListingForReserve(ctx context.Context, cardID int64, language, variantName string) (reservation.ListingInfo, error)
 	// ListReservationLogs devuelve el historial de reservas (más recientes
 	// primero), opcionalmente filtrado por estado. Se usa en el panel admin.
 	ListReservationLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error)

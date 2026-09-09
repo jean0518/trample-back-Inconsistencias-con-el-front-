@@ -34,13 +34,15 @@ type Reservation struct {
 	CreatedAt   time.Time
 }
 
-// ReserveInput describe lo que se quiere reservar: N unidades de una carta
-// en un idioma concreto.
+// ReserveInput describe lo que se quiere reservar: N unidades de una carta en
+// un idioma concreto y, opcionalmente, el acabado (Normal, Foil, etc.). Si
+// VariantName viene vacío, se reserva el listing activo con más stock.
 type ReserveInput struct {
-	UserID   int64
-	CardID   int64
-	Language string
-	Quantity int
+	UserID      int64
+	CardID      int64
+	Language    string
+	VariantName string
+	Quantity    int
 }
 
 // ListingInfo describe el listing activo elegido para reservar una carta en

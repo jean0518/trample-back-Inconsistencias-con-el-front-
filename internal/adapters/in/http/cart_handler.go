@@ -48,9 +48,10 @@ func newCartItemResponse(r reservation.Reservation) cartItemResponse {
 }
 
 type addToCartRequest struct {
-	CardID   int64  `json:"card_id"`
-	Language string `json:"language"`
-	Quantity int    `json:"quantity"`
+	CardID      int64  `json:"card_id"`
+	Language    string `json:"language"`
+	VariantName string `json:"variant_name,omitempty"`
+	Quantity    int    `json:"quantity"`
 }
 
 // AddToCart agrega una carta al carrito, reservando su stock por 5 minutos.
@@ -84,10 +85,11 @@ func (h *CartHandler) AddToCart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.cart.Add(r.Context(), reservation.ReserveInput{
-		UserID:   user.ID,
-		CardID:   body.CardID,
-		Language: body.Language,
-		Quantity: body.Quantity,
+		UserID:      user.ID,
+		CardID:      body.CardID,
+		Language:    body.Language,
+		VariantName: body.VariantName,
+		Quantity:    body.Quantity,
 	})
 	if err != nil {
 		if errors.Is(err, reservation.ErrInsufficientStock) {

@@ -61,16 +61,25 @@ func scanListingRow(row pgx.Row) (listingRow, error) {
 }
 
 // FindListingForReserve devuelve el listing activo con stock más adecuado
-// para reservar una carta en un idioma concreto.
-func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardID int64, language string) (reservation.ListingInfo, error) {
-	row := r.db.QueryRow(ctx, listingSelect+`
+// para reservar una carta en un idioma concreto. Si variantName no viene
+// vacío, solo considera listings de ese acabado (insensible a mayúsculas).
+func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardID int64, language, variantName string) (reservation.ListingInfo, error) {
+	query := listingSelect + `
 		AND cv.card_id = $1
 		AND il.language = $2
 		AND il.status = 'active'
 		AND il.quantity > 0
+	`
+	args := []any{cardID, language}
+	if variantName != "" {
+		query += ` AND LOWER(cv.variant_name) = LOWER($3)`
+		args = append(args, variantName)
+	}
+	query += `
 		ORDER BY il.quantity DESC, il.id ASC
 		LIMIT 1
-	`, cardID, language)
+	`
+	row := r.db.QueryRow(ctx, query, args...)
 	l, err := scanListingRow(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -114,7 +123,7 @@ func cardReserved(ctx context.Context, tx pgx.Tx, cardID int64, language string)
 // Reserve descuenta stock del listing y crea (o incrementa) la reserva activa
 // del usuario en una transacción atómica de 5 minutos.
 func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.ReserveInput, durationMinutes int) (reservation.Reservation, error) {
-	info, err := r.FindListingForReserve(ctx, input.CardID, input.Language)
+	info, err := r.FindListingForReserve(ctx, input.CardID, input.Language, input.VariantName)
 	if err != nil {
 		return reservation.Reservation{}, err
 	}

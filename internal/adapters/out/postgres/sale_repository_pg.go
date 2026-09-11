@@ -57,18 +57,19 @@ func (r *SaleRepository) Create(ctx context.Context, s sale.Sale) (sale.Sale, er
 		created.Items = append(created.Items, item)
 	}
 
-	// Al vender, el listing queda 'inactive' (la carta no vuelve al público
-	// pero sí puede reactivarse/modificarse). El detalle de la venta queda en
-	// el historial de ventas.
+	// Al vender se descuenta el inventario (la carta se consume aquí, no al
+	// reservar): si el listing llega a 0 unidades pasa a 'inactive' y deja de
+	// aparecer en el catálogo público; si le quedan unidades, permanece activo
+	// y vendible. El detalle de la venta queda en el historial de ventas.
 	for _, it := range s.Items {
 		if _, err := tx.Exec(ctx, `
 			UPDATE inventory_listings
 			SET quantity = CASE WHEN quantity - $2 <= 0 THEN 0 ELSE quantity - $2 END,
-			    status = 'inactive',
+			    status = CASE WHEN quantity - $2 <= 0 THEN 'inactive' ELSE status END,
 			    updated_at = now()
 			WHERE id = $1
 		`, it.ListingID, it.Quantity); err != nil {
-			return sale.Sale{}, fmt.Errorf("marcar listing vendido: %w", err)
+			return sale.Sale{}, fmt.Errorf("descontar listing vendido: %w", err)
 		}
 	}
 

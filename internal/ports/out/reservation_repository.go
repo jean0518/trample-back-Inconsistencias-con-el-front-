@@ -9,8 +9,9 @@ import (
 // del inventario al agregar una carta al carrito y se restaura si el cliente
 // abandona o expira.
 type ReservationRepository interface {
-	// Reserve descuenta `quantity` del listing vigente y crea la reserva
-	// activa en una transacción atómica. Si el stock no alcanza devuelve
+	// Reserve crea (o incrementa) la reserva activa del usuario sin descontar
+	// el inventario; el listing se consume solo al confirmarse la venta. Si el
+	// stock comprable (quantity - reservas activas) no alcanza, devuelve
 	// reservation.ErrInsufficientStock.
 	Reserve(ctx context.Context, input reservation.ReserveInput, durationMinutes int) (reservation.Reservation, error)
 	// ListActiveByUser devuelve las reservas activas del usuario.
@@ -20,12 +21,14 @@ type ReservationRepository interface {
 	ListActiveByUserAndIDs(ctx context.Context, userID int64, ids []int64) ([]reservation.Reservation, error)
 	// Confirm marca las reservas indicadas del usuario como 'confirmed'.
 	Confirm(ctx context.Context, userID int64, ids []int64) error
-	// Remove libera una reserva activa del usuario y restaura el stock al
-	// listing. Devuelve reservation.ErrNotFound si la reserva no existe, no
-	// pertenece al usuario o no está activa.
+	// Remove libera una reserva activa del usuario (el stock queda disponible
+	// de nuevo para otros clientes; el inventario no se modifica). Devuelve
+	// reservation.ErrNotFound si la reserva no existe, no pertenece al usuario
+	// o no está activa.
 	Remove(ctx context.Context, userID, id int64) error
-	// ReleaseExpired libera todas las reservas 'active' ya vencidas y
-	// restaura su stock. Devuelve la cantidad de reservas liberadas.
+	// ReleaseExpired libera todas las reservas 'active' ya vencidas para que
+	// su stock vuelva a estar disponible. Devuelve la cantidad de reservas
+	// liberadas.
 	ReleaseExpired(ctx context.Context) (int64, error)
 	// AvailableStock devuelve las unidades disponibles (stock real menos
 	// reservas activas) de una carta en un idioma concreto.

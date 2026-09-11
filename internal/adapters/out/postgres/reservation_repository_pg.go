@@ -102,26 +102,25 @@ func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardI
 	}, nil
 }
 
-// cardReserved suma las unidades de una carta+idioma que están
+// listingReserved suma las unidades de un listing concreto que están
 // reservadas activamente (cualquier usuario) para calcular el stock
-// realmente comprable dentro de la transacción.
-func cardReserved(ctx context.Context, tx pgx.Tx, cardID int64, language string) (int, error) {
+// realmente comprable de esa variante+idioma dentro de la transacción.
+func listingReserved(ctx context.Context, tx pgx.Tx, listingID int64) (int, error) {
 	var reserved int
 	err := tx.QueryRow(ctx, `
 		SELECT COALESCE(SUM(cr.quantity), 0)
 		FROM cart_reservations cr
-		JOIN inventory_listings il ON il.id = cr.listing_id
-		JOIN card_variants cv ON cv.id = il.variant_id
-		WHERE cv.card_id = $1 AND il.language = $2 AND cr.status = 'active'
-	`, cardID, language).Scan(&reserved)
+		WHERE cr.listing_id = $1 AND cr.status = 'active'
+	`, listingID).Scan(&reserved)
 	if err != nil {
 		return 0, err
 	}
 	return reserved, nil
 }
 
-// Reserve descuenta stock del listing y crea (o incrementa) la reserva activa
-// del usuario en una transacción atómica de 5 minutos.
+// Reserve registra (o incrementa) la reserva activa del usuario en una
+// transacción atómica de 5 minutos. NO descuenta el inventario: la carta se
+// consume del listing solo al confirmarse la venta.
 func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.ReserveInput, durationMinutes int) (reservation.Reservation, error) {
 	info, err := r.FindListingForReserve(ctx, input.CardID, input.Language, input.VariantName)
 	if err != nil {
@@ -134,21 +133,24 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 	}
 	defer tx.Rollback(ctx)
 
-	// Stock realmente comprable de la carta+idioma: suma de listings activos
-	// menos las reservas activas de cualquier usuario.
+	// Stock realmente comprable del listing específico (variante+idioma):
+	// unidades del listing menos las reservas activas de cualquier usuario
+	// para ese mismo listing. La cláusula FOR UPDATE bloquea la fila para
+	// serializar reservas concurrentes y evitar que dos clientes reserven la
+	// última unidad al mismo tiempo.
 	var totalStock int
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(il.quantity), 0)::int
+		SELECT COALESCE(il.quantity, 0)::int
 		FROM inventory_listings il
-		JOIN card_variants cv ON cv.id = il.variant_id
-		WHERE cv.card_id = $1 AND il.language = $2 AND il.status = 'active' AND il.quantity > 0
-	`, input.CardID, input.Language).Scan(&totalStock); err != nil {
-		return reservation.Reservation{}, fmt.Errorf("calcular stock total: %w", err)
+		WHERE il.id = $1 AND il.status = 'active'
+		FOR UPDATE
+	`, info.ListingID).Scan(&totalStock); err != nil {
+		return reservation.Reservation{}, fmt.Errorf("calcular stock del listing: %w", err)
 	}
 
-	reserved, err := cardReserved(ctx, tx, input.CardID, input.Language)
+	reserved, err := listingReserved(ctx, tx, info.ListingID)
 	if err != nil {
-		return reservation.Reservation{}, fmt.Errorf("calcular reservado de la carta: %w", err)
+		return reservation.Reservation{}, fmt.Errorf("calcular reservado del listing: %w", err)
 	}
 	available := totalStock - reserved
 	if input.Quantity <= 0 || available < input.Quantity {
@@ -176,14 +178,9 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 		return reservation.Reservation{}, fmt.Errorf("crear/incrementar reserva: %w", err)
 	}
 
-	// Descuenta el stock del inventario (la venta confirmada lo deja 'inactive').
-	if _, err := tx.Exec(ctx, `
-		UPDATE inventory_listings
-		SET quantity = quantity - $2, updated_at = now()
-		WHERE id = $1
-	`, info.ListingID, input.Quantity); err != nil {
-		return reservation.Reservation{}, fmt.Errorf("descontar stock del listing: %w", err)
-	}
+	// El inventario NO se descuenta aquí: la carta se consume al confirmarse
+	// la venta (SaleRepository.Create). Mientras la reserva esté activa, ese
+	// stock queda "apartado" y no lo puede reservar otro cliente.
 
 	// Historico: la carta pasó a reservada (active).
 	if err := logReservation(ctx, tx, reservation.ReservationLog{
@@ -374,11 +371,10 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID, id int64) er
 	}
 	defer tx.Rollback(ctx)
 
-	var listingID int64
 	var quantity int
 	var details reservation.Reservation
 	err = tx.QueryRow(ctx, `
-		SELECT cr.listing_id, cr.quantity,
+		SELECT cr.quantity,
 		       c.id, c.name, cv.variant_name, il.language, il.price_usd, il.price_cop
 		FROM cart_reservations cr
 		JOIN inventory_listings il ON il.id = cr.listing_id
@@ -387,7 +383,7 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID, id int64) er
 		WHERE cr.id = $1 AND cr.user_id = $2 AND cr.status = 'active'
 		FOR UPDATE
 	`, id, userID).Scan(
-		&listingID, &quantity,
+		&quantity,
 		&details.CardID, &details.CardName, &details.VariantName, &details.Language,
 		&details.PriceUSD, &details.PriceCOP,
 	)
@@ -404,13 +400,10 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID, id int64) er
 		return fmt.Errorf("liberar reserva: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE inventory_listings SET quantity = quantity + $2, updated_at = now() WHERE id = $1
-	`, listingID, quantity); err != nil {
-		return fmt.Errorf("restaurar stock del listing: %w", err)
-	}
+	// El inventario no se restaura: nunca se descontó al reservar (la carta
+	// se consume solo al confirmarse la venta).
 
-	// Historico: la reserva se devolvió al stock.
+	// Historico: la reserva se devolvió (quedó disponible para otros clientes).
 	if err := logReservation(ctx, tx, reservation.ReservationLog{
 		ReservationID: id,
 		UserID:        userID,
@@ -476,12 +469,8 @@ func (r *ReservationRepository) ReleaseExpired(ctx context.Context) (int64, erro
 		if _, err := tx.Exec(ctx, `UPDATE cart_reservations SET status = 'released' WHERE id = $1`, e.id); err != nil {
 			return 0, fmt.Errorf("marcar reserva liberada: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE inventory_listings SET quantity = quantity + $2, updated_at = now() WHERE id = $1
-		`, e.listingID, e.quantity); err != nil {
-			return 0, fmt.Errorf("restaurar stock expirado: %w", err)
-		}
-		// Historico: por vencimiento, la reserva se devuelve al stock.
+		// El inventario no se restaura: nunca se descontó al reservar.
+		// Historico: por vencimiento, la reserva vuelve a estar disponible.
 		if err := logReservation(ctx, tx, reservation.ReservationLog{
 			ReservationID: e.id,
 			UserID:        e.details.UserID,

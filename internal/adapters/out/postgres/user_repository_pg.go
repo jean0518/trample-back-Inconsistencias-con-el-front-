@@ -19,6 +19,9 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 }
 
 func (r *UserRepository) Create(ctx context.Context, user auth.User) (auth.User, error) {
+	if user.Permissions == nil {
+		user.Permissions = []string{}
+	}
 	err := r.db.QueryRow(ctx,
 		`INSERT INTO users (first_name, last_name, email, password_hash, role, permissions)
 		 VALUES ($1, $2, $3, $4, $5, $6)

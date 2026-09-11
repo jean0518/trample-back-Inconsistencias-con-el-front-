@@ -100,6 +100,9 @@ type VariantBrief struct {
 	Name     string  `json:"name"`
 	PriceUSD float64 `json:"price_usd"`
 	PriceCOP int64   `json:"price_cop"`
+	// Idiomas en los que existe esta variante en el inventario activo, con su
+	// stock (cantidad del listing menos reservas cart activas de ese idioma).
+	Languages []CardLanguageBrief `json:"languages"`
 }
 
 // Idiomas en los que existe una carta en el inventario, con su stock.

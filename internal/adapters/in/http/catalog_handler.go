@@ -29,7 +29,7 @@ func NewCatalogHandler(listCards *appCatalog.ListCardsUseCase) *CatalogHandler {
 // @Param        name          query  string  false  "Nombre parcial de la carta"
 // @Param        rarity        query  string  false  "Rareza exacta (ej: Rare Holo)"
 // @Param        max_price     query  int     false  "Precio máximo en COP (por la variante más barata)"
-// @Param        sort          query  string  false  "Orden: relevance | price-asc | price-desc | name"
+// @Param        sort          query  string  false  "Orden: relevance | price-asc | price-desc | name | newest"
 // @Param        page          query  int     false  "Página (default 1)"
 // @Param        page_size     query  int     false  "Resultados por página (default 20, max 100)"
 // @Success      200  {object}  object{page=int,page_size=int,total=int,cards=[]catalog.CardSummary}

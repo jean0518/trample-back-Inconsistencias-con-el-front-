@@ -126,6 +126,21 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 				return fmt.Errorf("upsert precio variante %q: %w", variant.Name, err)
 			}
 
+			// Re-preciar los listings de la variante al precio de mercado
+			// recién actualizado. Esto evita la inconsistencia en la que dos
+			// personas registran la misma carta en momentos distintos y cada
+			// copia queda con un precio diferente: todas las copias pasan a
+			// reflejar el precio de mercado vigente.
+			if variant.NMPrice.MarketUSD > 0 {
+				if _, err := tx.Exec(ctx, `
+					UPDATE inventory_listings
+					SET price_usd = $2, price_cop = $3, updated_at = now()
+					WHERE variant_id = $1
+				`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
+				}
+			}
+
 			if _, err := tx.Exec(ctx, `UPDATE card_variants SET last_price_check_at = now() WHERE id = $1`, variantID); err != nil {
 				return fmt.Errorf("actualizar last_price_check_at: %w", err)
 			}
@@ -156,6 +171,16 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		orderBy = displayPrice + " DESC, c.id"
 	case "name":
 		orderBy = "c.name ASC, c.id"
+	case "newest":
+		// Recientes: las cartas con listings nuevos primero. Se usa la fecha
+		// del listing activo más reciente; si la carta quedó sin listings
+		// activos en este vuelo, cae a la fecha de actualización de la carta.
+		orderBy = `COALESCE((
+			SELECT MAX(il_c.created_at)
+			FROM inventory_listings il_c
+			JOIN card_variants lcv_c ON lcv_c.id = il_c.variant_id
+			WHERE lcv_c.card_id = c.id AND il_c.status = 'active' AND il_c.quantity > 0
+		), c.updated_at) DESC, c.id`
 	}
 
 	query := fmt.Sprintf(`
@@ -176,16 +201,37 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			COALESCE((SELECT ci.small_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.medium_url FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
 			COALESCE((SELECT ci.large_url  FROM card_images ci WHERE ci.card_id = c.id LIMIT 1), ''),
-			%s AS display_price,
+			%1s AS display_price,
 			COALESCE(
-				(SELECT json_agg(json_build_object(
-					'name',      cv.variant_name,
-					'price_usd', COALESCE(vp.price_usd, 0),
-					'price_cop', COALESCE(vp.price_cop, 0)
-				))
-				FROM card_variants cv
-				LEFT JOIN variant_prices vp ON vp.variant_id = cv.id AND vp.condition = 'near_mint'
-				WHERE cv.card_id = c.id),
+				(SELECT json_agg(vb ORDER BY vb.name)
+				FROM (
+					SELECT
+						cv.variant_name AS name,
+						COALESCE(vp.price_usd, 0) AS price_usd,
+						COALESCE(vp.price_cop, 0) AS price_cop,
+						COALESCE((
+							SELECT json_agg(ls ORDER BY ls.stock DESC)
+							FROM (
+								SELECT
+									il2.language AS name,
+									GREATEST(SUM(il2.quantity) - COALESCE(MAX(r2.reserved), 0), 0)::int AS stock
+								FROM inventory_listings il2
+								LEFT JOIN LATERAL (
+									SELECT SUM(cr2.quantity)::int AS reserved
+									FROM cart_reservations cr2
+									JOIN inventory_listings crl2 ON crl2.id = cr2.listing_id
+									JOIN card_variants crv2 ON crv2.id = crl2.variant_id
+									WHERE crv2.id = cv.id AND cr2.status = 'active' AND crl2.language = il2.language
+								) r2 ON true
+								WHERE il2.variant_id = cv.id AND il2.status = 'active' AND il2.quantity > 0
+								  AND il2.language IS NOT NULL AND il2.language <> ''
+								GROUP BY il2.language
+							) ls
+						), '[]'::json) AS languages
+					FROM card_variants cv
+					LEFT JOIN variant_prices vp ON vp.variant_id = cv.id AND vp.condition = 'near_mint'
+					WHERE cv.card_id = c.id
+				) vb),
 				'[]'
 			)::text,
 			COALESCE((
@@ -272,33 +318,33 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 		total  int
 	)
 	for rows.Next() {
-	var (
-		s            catalog.CardSummary
-		variantsJSON string
-		languagesJSON string
-		displayPrice int64
-	)
-	if err := rows.Scan(
-		&s.ID, &s.ExternalID, &s.Language, &s.OwnerName,
-		&s.Name, &s.Number, &s.Rarity, &s.GameCode,
-		&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
-		&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
-		&s.Image.Small, &s.Image.Medium, &s.Image.Large,
-		&displayPrice,
-		&variantsJSON,
-		&s.Stock,
-		&languagesJSON,
-		&total,
-	); err != nil {
-		return nil, 0, err
-	}
-	if err := json.Unmarshal([]byte(variantsJSON), &s.Variants); err != nil {
-		return nil, 0, fmt.Errorf("parsear variantes: %w", err)
-	}
-	if err := json.Unmarshal([]byte(languagesJSON), &s.Languages); err != nil {
-		return nil, 0, fmt.Errorf("parsear idiomas: %w", err)
-	}
-	result = append(result, s)
+		var (
+			s             catalog.CardSummary
+			variantsJSON  string
+			languagesJSON string
+			displayPrice  int64
+		)
+		if err := rows.Scan(
+			&s.ID, &s.ExternalID, &s.Language, &s.OwnerName,
+			&s.Name, &s.Number, &s.Rarity, &s.GameCode,
+			&s.Expansion.ID, &s.Expansion.Name, &s.Expansion.Code,
+			&s.Expansion.LogoURL, &s.Expansion.SymbolURL,
+			&s.Image.Small, &s.Image.Medium, &s.Image.Large,
+			&displayPrice,
+			&variantsJSON,
+			&s.Stock,
+			&languagesJSON,
+			&total,
+		); err != nil {
+			return nil, 0, err
+		}
+		if err := json.Unmarshal([]byte(variantsJSON), &s.Variants); err != nil {
+			return nil, 0, fmt.Errorf("parsear variantes: %w", err)
+		}
+		if err := json.Unmarshal([]byte(languagesJSON), &s.Languages); err != nil {
+			return nil, 0, fmt.Errorf("parsear idiomas: %w", err)
+		}
+		result = append(result, s)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err

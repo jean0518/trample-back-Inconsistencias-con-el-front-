@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 )

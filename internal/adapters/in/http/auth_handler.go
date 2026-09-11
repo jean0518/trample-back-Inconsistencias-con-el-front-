@@ -17,20 +17,26 @@ type AuthHandler struct {
 }
 
 type authUserResponse struct {
-	ID        int64  `json:"id"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
+	ID          int64    `json:"id"`
+	FirstName   string   `json:"first_name"`
+	LastName    string   `json:"last_name"`
+	Email       string   `json:"email"`
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"`
 }
 
 func newAuthUserResponse(u auth.User) authUserResponse {
+	perms := u.Permissions
+	if perms == nil {
+		perms = []string{}
+	}
 	return authUserResponse{
-		ID:        u.ID,
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Email:     u.Email,
-		Role:      u.Role,
+		ID:          u.ID,
+		FirstName:   u.FirstName,
+		LastName:    u.LastName,
+		Email:       u.Email,
+		Role:        u.Role,
+		Permissions: perms,
 	}
 }
 
@@ -138,12 +144,17 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	perms := authUser.Permissions
+	if perms == nil {
+		perms = []string{}
+	}
 	JSON(w, http.StatusOK, authUserResponse{
-		ID:        authUser.ID,
-		FirstName: authUser.FirstName,
-		LastName:  authUser.LastName,
-		Email:     authUser.Email,
-		Role:      authUser.Role,
+		ID:          authUser.ID,
+		FirstName:   authUser.FirstName,
+		LastName:    authUser.LastName,
+		Email:       authUser.Email,
+		Role:        authUser.Role,
+		Permissions: perms,
 	})
 }
 

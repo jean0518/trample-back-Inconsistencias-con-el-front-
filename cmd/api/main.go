@@ -22,6 +22,7 @@ import (
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
 	"trample-back/internal/adapters/out/trm"
+	appAdmin "trample-back/internal/application/admin"
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
 	appListing "trample-back/internal/application/listing"
@@ -80,6 +81,10 @@ func main() {
 	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
 	listOwnersUC := appOwner.NewListOwnersUseCase(ownerRepo)
 	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
+	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo)
+	listAdminsUC := appAdmin.NewListAdminsUseCase(userRepo)
+	updatePermissionsUC := appAdmin.NewUpdatePermissionsUseCase(userRepo)
+	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(userRepo)
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
@@ -97,6 +102,7 @@ func main() {
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, listOwnersUC, deleteOwnerUC),
+		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updatePermissionsUC, deleteAdminUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
 		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
 		AuthMiddleware: authMiddleware,

@@ -58,17 +58,22 @@ func (uc *LoginUseCase) Execute(ctx context.Context, in LoginInput) (LoginResult
 
 // IssueToken firma un JWT para un usuario ya autenticado (login o registro).
 func (uc *LoginUseCase) IssueToken(_ context.Context, user auth.User) (string, error) {
+	perms := user.Permissions
+	if perms == nil {
+		perms = []string{}
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":        strconv.FormatInt(user.ID, 10),
-		"email":      user.Email,
-		"first_name": user.FirstName,
-		"last_name":  user.LastName,
-		"role":       user.Role,
-		"iss":        "trample-api",
-		"aud":        "trample-web",
-		"iat":        now.Unix(),
-		"exp":        now.Add(24 * time.Hour).Unix(),
+		"sub":         strconv.FormatInt(user.ID, 10),
+		"email":       user.Email,
+		"first_name":  user.FirstName,
+		"last_name":   user.LastName,
+		"role":        user.Role,
+		"permissions": perms,
+		"iss":         "trample-api",
+		"aud":         "trample-web",
+		"iat":         now.Unix(),
+		"exp":         now.Add(24 * time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(uc.jwtSecret)

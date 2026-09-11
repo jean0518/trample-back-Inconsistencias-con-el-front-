@@ -18,10 +18,10 @@ type Handlers struct {
 	Magic          *MagicHandler
 	Riftbound      *RiftboundHandler
 	Listings       *ListingHandler
-
 	Owners         *OwnerHandler
 	Cart           *CartHandler
 	Sales          *SaleHandler
+	AdminUsers     *AdminUserHandler
 	AuthMiddleware *AuthMiddleware
 	AllowedOrigins []string
 }
@@ -143,31 +143,54 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.Sales.ListSales)
 	})
 
-	// Admin — sincronización e importación (solo usuarios con rol "admin")
+	// Admin — sincronización e importación (admin y superadmin)
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
-		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
-		r.Post("/cards/import-listing", h.Pokemon.ImportToListing)
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin))
+
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermCatalogo)).
+			Post("/cards/import-listing", h.Pokemon.ImportToListing)
+
 		r.Route("/owners", func(r chi.Router) {
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermPropietarios))
 			r.Get("/", h.Owners.List)
 			r.Post("/", h.Owners.Create)
 			r.Delete("/{id}", h.Owners.Delete)
 		})
-		r.Get("/reservation-logs", h.Cart.ListReservationLogs)
-		r.Get("/sales-stats", h.Sales.SalesStats)
+
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermVentas)).
+			Get("/reservation-logs", h.Cart.ListReservationLogs)
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermVentas)).
+			Get("/sales-stats", h.Sales.SalesStats)
+
 		r.Route("/pokemon", func(r chi.Router) {
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)
 			r.Delete("/cards/{id}", h.Pokemon.DeleteCard)
 		})
 		r.Route("/magic", func(r chi.Router) {
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
 			r.Post("/expansions/sync", h.Magic.SyncExpansions)
 			r.Post("/cards/import-listing", h.Magic.ImportToListing)
 			r.Put("/cards/{id}", h.Magic.RefreshCard)
 			r.Delete("/cards/{id}", h.Magic.DeleteCard)
 		})
 		r.Route("/riftbound", func(r chi.Router) {
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
 			r.Post("/expansions/sync", h.Riftbound.SyncExpansions)
+		})
+	})
+
+	// Superadmin — gestión de usuarios admin y sus permisos
+	r.Route("/superadmin", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleSuperAdmin))
+		r.Route("/users", func(r chi.Router) {
+			r.Get("/", h.AdminUsers.List)
+			r.Post("/", h.AdminUsers.Create)
+			r.Patch("/{id}/permissions", h.AdminUsers.UpdatePermissions)
+			r.Delete("/{id}", h.AdminUsers.Delete)
 		})
 	})
 

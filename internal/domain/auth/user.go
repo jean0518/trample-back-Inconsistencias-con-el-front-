@@ -3,17 +3,27 @@ package auth
 import "errors"
 
 var ErrEmailTaken = errors.New("email ya registrado")
+var ErrUserNotFound = errors.New("usuario no encontrado")
 
 const (
-	RoleCustomer = "customer"
-	RoleAdmin    = "admin"
+	RoleCustomer   = "customer"
+	RoleAdmin      = "admin"
+	RoleSuperAdmin = "superadmin"
+)
+
+const (
+	PermVentas       = "ventas"
+	PermInventario   = "inventario"
+	PermPropietarios = "propietarios"
+	PermCatalogo     = "catalogo"
 )
 
 type User struct {
-	ID        int64
-	FirstName string
-	LastName  string
-	Email     string
-	Password  string // bcrypt hash
-	Role      string
+	ID          int64
+	FirstName   string
+	LastName    string
+	Email       string
+	Password    string // bcrypt hash
+	Role        string
+	Permissions []string
 }

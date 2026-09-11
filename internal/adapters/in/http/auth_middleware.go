@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
+	"trample-back/internal/domain/auth"
 )
 
 const authCtxKey ctxKey = "auth_user"
@@ -16,18 +17,20 @@ const AuthCookieName = "trample_token"
 type ctxKey string
 
 type AuthUser struct {
-	ID        int64
-	Email     string
-	FirstName string
-	LastName  string
-	Role      string
+	ID          int64
+	Email       string
+	FirstName   string
+	LastName    string
+	Role        string
+	Permissions []string
 }
 
 type authClaims struct {
-	Email     string `json:"email"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Role      string `json:"role"`
+	Email       string   `json:"email"`
+	FirstName   string   `json:"first_name"`
+	LastName    string   `json:"last_name"`
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"`
 	jwt.RegisteredClaims
 }
 
@@ -89,12 +92,17 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
+		perms := claims.Permissions
+		if perms == nil {
+			perms = []string{}
+		}
 		ctx := context.WithValue(r.Context(), authCtxKey, AuthUser{
-			ID:        id,
-			Email:     claims.Email,
-			FirstName: claims.FirstName,
-			LastName:  claims.LastName,
-			Role:      claims.Role,
+			ID:          id,
+			Email:       claims.Email,
+			FirstName:   claims.FirstName,
+			LastName:    claims.LastName,
+			Role:        claims.Role,
+			Permissions: perms,
 		})
 
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -112,6 +120,31 @@ func (m *AuthMiddleware) RequireRole(roles ...string) func(http.Handler) http.Ha
 			}
 			for _, role := range roles {
 				if user.Role == role {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			Error(w, http.StatusForbidden, "forbidden")
+		})
+	}
+}
+
+// RequirePermission permite el acceso si el usuario tiene el permiso dado.
+// Los superadmins siempre pasan sin importar el permiso.
+func (m *AuthMiddleware) RequirePermission(perm string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := AuthFromContext(r.Context())
+			if !ok {
+				Error(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if user.Role == auth.RoleSuperAdmin {
+				next.ServeHTTP(w, r)
+				return
+			}
+			for _, p := range user.Permissions {
+				if p == perm {
 					next.ServeHTTP(w, r)
 					return
 				}

@@ -25,6 +25,7 @@ const inventoryListingSelect = `
 	SELECT
 		il.id, il.seller_id, il.variant_id, il.owner_id,
 		g.id AS game_id, g.name AS game_name,
+		c.id AS card_id, c.external_id AS card_external_id, c.number AS card_number,
 		c.name AS card_name,
 		COALESCE(
 			(SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),
@@ -53,6 +54,7 @@ func scanListingRows(rows pgx.Rows) ([]listing.Listing, error) {
 		if err := rows.Scan(
 			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 			&l.GameID, &l.GameName,
+			&l.CardID, &l.ExternalID, &l.CardNumber,
 			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
 			&l.OwnerName, &l.SellerName,
 			&l.Quantity, &l.PriceUSD, &l.PriceCOP,

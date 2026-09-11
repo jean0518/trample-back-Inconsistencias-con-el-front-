@@ -16,8 +16,14 @@ type Listing struct {
 	GameID    int64
 	GameName  string
 	// Datos de la carta para el inventario legible (JOIN con cards/expansions).
-	CardName      string
-	CardImage     string
+	CardID int64
+	// ExternalID y CardNumber identifican la versión concreta de la carta
+	// (dos cartas pueden compartir nombre pero diferir en número, p. ej.
+	// "Ahri, Inquisitive" 119 vs 119a).
+	ExternalID string
+	CardNumber string
+	CardName   string
+	CardImage  string
 	ExpansionName string
 	VariantName   string
 	OwnerName     string

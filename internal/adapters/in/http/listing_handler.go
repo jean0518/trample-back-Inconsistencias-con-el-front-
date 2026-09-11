@@ -33,6 +33,9 @@ type listingResponse struct {
 	OwnerID       int64   `json:"OwnerID"`
 	OwnerName     string  `json:"OwnerName"`
 	GameName      string  `json:"GameName"`
+	CardID        int64   `json:"CardID"`
+	ExternalID    string  `json:"ExternalID"`
+	CardNumber    string  `json:"CardNumber"`
 	CardName      string  `json:"CardName"`
 	CardImage     string  `json:"CardImage"`
 	ExpansionName string  `json:"ExpansionName"`
@@ -63,6 +66,9 @@ func newListingResponse(l listing.Listing) listingResponse {
 		OwnerID:       l.OwnerID,
 		OwnerName:     l.OwnerName,
 		GameName:      l.GameName,
+		CardID:        l.CardID,
+		ExternalID:    l.ExternalID,
+		CardNumber:    l.CardNumber,
 		CardName:      l.CardName,
 		CardImage:     l.CardImage,
 		ExpansionName: l.ExpansionName,

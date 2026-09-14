@@ -130,7 +130,7 @@ func (m *AuthMiddleware) RequireRole(roles ...string) func(http.Handler) http.Ha
 }
 
 // RequirePermission permite el acceso si el usuario tiene el permiso dado.
-// Los superadmins siempre pasan sin importar el permiso.
+// El admin siempre pasa sin importar el permiso.
 func (m *AuthMiddleware) RequirePermission(perm string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +139,7 @@ func (m *AuthMiddleware) RequirePermission(perm string) func(http.Handler) http.
 				Error(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
-			if user.Role == auth.RoleSuperAdmin {
+			if user.Role == auth.RoleAdmin {
 				next.ServeHTTP(w, r)
 				return
 			}

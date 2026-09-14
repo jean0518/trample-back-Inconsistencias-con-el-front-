@@ -23,8 +23,8 @@ func (r *UserRepository) Create(ctx context.Context, user auth.User) (auth.User,
 		user.Permissions = []string{}
 	}
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO users (first_name, last_name, email, password_hash, role, permissions)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO users (first_name, last_name, email, password_hash, role_id, permissions)
+		 VALUES ($1, $2, $3, $4, (SELECT id FROM roles WHERE name = $5), $6)
 		 RETURNING id`,
 		user.FirstName, user.LastName, user.Email, user.Password, user.Role, user.Permissions,
 	).Scan(&user.ID)
@@ -41,8 +41,9 @@ func (r *UserRepository) Create(ctx context.Context, user auth.User) (auth.User,
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (auth.User, error) {
 	var u auth.User
 	err := r.db.QueryRow(ctx,
-		`SELECT id, first_name, last_name, email, password_hash, role, COALESCE(permissions, '{}')
-		 FROM users WHERE email = $1`,
+		`SELECT u.id, u.first_name, u.last_name, u.email, u.password_hash, ro.name, COALESCE(u.permissions, '{}')
+		 FROM users u JOIN roles ro ON ro.id = u.role_id
+		 WHERE u.email = $1`,
 		email,
 	).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions)
 	return u, err
@@ -51,8 +52,9 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (auth.Us
 func (r *UserRepository) FindByID(ctx context.Context, id int64) (auth.User, error) {
 	var u auth.User
 	err := r.db.QueryRow(ctx,
-		`SELECT id, first_name, last_name, email, password_hash, role, COALESCE(permissions, '{}')
-		 FROM users WHERE id = $1`,
+		`SELECT u.id, u.first_name, u.last_name, u.email, u.password_hash, ro.name, COALESCE(u.permissions, '{}')
+		 FROM users u JOIN roles ro ON ro.id = u.role_id
+		 WHERE u.id = $1`,
 		id,
 	).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -63,9 +65,10 @@ func (r *UserRepository) FindByID(ctx context.Context, id int64) (auth.User, err
 
 func (r *UserRepository) ListAdmins(ctx context.Context) ([]auth.User, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, first_name, last_name, email, role, COALESCE(permissions, '{}'), created_at
-		 FROM users WHERE role IN ('admin', 'superadmin')
-		 ORDER BY id ASC`,
+		`SELECT u.id, u.first_name, u.last_name, u.email, ro.name, COALESCE(u.permissions, '{}'), u.created_at
+		 FROM users u JOIN roles ro ON ro.id = u.role_id
+		 WHERE ro.name IN ('colaborador', 'sup_colaborador')
+		 ORDER BY u.id ASC`,
 	)
 	if err != nil {
 		return nil, err
@@ -84,10 +87,15 @@ func (r *UserRepository) ListAdmins(ctx context.Context) ([]auth.User, error) {
 	return users, rows.Err()
 }
 
-func (r *UserRepository) UpdatePermissions(ctx context.Context, id int64, permissions []string) error {
+func (r *UserRepository) UpdateRole(ctx context.Context, id int64, role string, permissions []string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET permissions = $1, updated_at = now() WHERE id = $2 AND role = 'admin'`,
-		permissions, id,
+		`UPDATE users SET
+		   role_id = (SELECT id FROM roles WHERE name = $1),
+		   permissions = $2,
+		   updated_at = now()
+		 WHERE id = $3
+		   AND role_id IN (SELECT id FROM roles WHERE name IN ('colaborador', 'sup_colaborador'))`,
+		role, permissions, id,
 	)
 	if err != nil {
 		return err
@@ -100,7 +108,9 @@ func (r *UserRepository) UpdatePermissions(ctx context.Context, id int64, permis
 
 func (r *UserRepository) Delete(ctx context.Context, id int64) error {
 	tag, err := r.db.Exec(ctx,
-		`DELETE FROM users WHERE id = $1 AND role = 'admin'`,
+		`DELETE FROM users
+		 WHERE id = $1
+		   AND role_id IN (SELECT id FROM roles WHERE name IN ('colaborador', 'sup_colaborador'))`,
 		id,
 	)
 	if err != nil {

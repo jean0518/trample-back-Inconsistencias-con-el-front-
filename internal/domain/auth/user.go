@@ -6,9 +6,10 @@ var ErrEmailTaken = errors.New("email ya registrado")
 var ErrUserNotFound = errors.New("usuario no encontrado")
 
 const (
-	RoleCustomer   = "customer"
-	RoleAdmin      = "admin"
-	RoleSuperAdmin = "superadmin"
+	RoleCustomer       = "customer"
+	RoleAdmin          = "admin"
+	RoleColaborador    = "colaborador"
+	RoleSupColaborador = "sup_colaborador"
 )
 
 const (

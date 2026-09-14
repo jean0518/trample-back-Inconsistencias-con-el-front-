@@ -10,6 +10,6 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (auth.User, error)
 	FindByID(ctx context.Context, id int64) (auth.User, error)
 	ListAdmins(ctx context.Context) ([]auth.User, error)
-	UpdatePermissions(ctx context.Context, id int64, permissions []string) error
+	UpdateRole(ctx context.Context, id int64, role string, permissions []string) error
 	Delete(ctx context.Context, id int64) error
 }

@@ -58,6 +58,7 @@ func main() {
 	expansionRepo := postgres.NewExpansionRepository(pool)
 	cardRepo := postgres.NewCardRepository(pool)
 	userRepo := postgres.NewUserRepository(pool)
+	roleRepo := postgres.NewRoleRepository(pool)
 	gameRepo := postgres.NewGameRepository(pool)
 	listingRepo := postgres.NewListingRepository(pool)
 	ownerRepo := postgres.NewOwnerRepository(pool)
@@ -81,9 +82,9 @@ func main() {
 	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
 	listOwnersUC := appOwner.NewListOwnersUseCase(ownerRepo)
 	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
-	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo)
+	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo, roleRepo)
 	listAdminsUC := appAdmin.NewListAdminsUseCase(userRepo)
-	updatePermissionsUC := appAdmin.NewUpdatePermissionsUseCase(userRepo)
+	updateRoleUC := appAdmin.NewUpdateRoleUseCase(userRepo, roleRepo)
 	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(userRepo)
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
@@ -102,7 +103,7 @@ func main() {
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, listOwnersUC, deleteOwnerUC),
-		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updatePermissionsUC, deleteAdminUC),
+		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, deleteAdminUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
 		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
 		AuthMiddleware: authMiddleware,

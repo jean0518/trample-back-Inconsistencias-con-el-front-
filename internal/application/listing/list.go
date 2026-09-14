@@ -21,7 +21,7 @@ func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, sellerI
 	if limit <= 0 {
 		limit = 50
 	}
-	if role == auth.RoleAdmin || role == auth.RoleSuperAdmin {
+	if role == auth.RoleAdmin {
 		return uc.repo.ListAll(ctx, limit, offset)
 	}
 	return uc.repo.ListBySeller(ctx, sellerID, limit, offset)

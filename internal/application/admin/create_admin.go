@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+
 	"trample-back/internal/domain/auth"
 	"trample-back/internal/ports/out"
 
@@ -13,30 +14,29 @@ import (
 var (
 	ErrInvalidName      = errors.New("nombre y apellido son requeridos")
 	ErrPasswordTooShort = errors.New("la contraseña debe tener al menos 6 caracteres")
-	ErrInvalidPermission = errors.New("permiso inválido")
+	ErrInvalidRole      = errors.New("rol inválido: debe ser 'colaborador' o 'sup_colaborador'")
 )
 
-var validPermissions = map[string]struct{}{
-	auth.PermVentas:       {},
-	auth.PermInventario:   {},
-	auth.PermPropietarios: {},
-	auth.PermCatalogo:     {},
+var validAdminRoles = map[string]struct{}{
+	auth.RoleColaborador:    {},
+	auth.RoleSupColaborador: {},
 }
 
 type CreateAdminInput struct {
-	FirstName   string
-	LastName    string
-	Email       string
-	Password    string
-	Permissions []string
+	FirstName string
+	LastName  string
+	Email     string
+	Password  string
+	Role      string
 }
 
 type CreateAdminUseCase struct {
 	users out.UserRepository
+	roles out.RoleRepository
 }
 
-func NewCreateAdminUseCase(users out.UserRepository) *CreateAdminUseCase {
-	return &CreateAdminUseCase{users: users}
+func NewCreateAdminUseCase(users out.UserRepository, roles out.RoleRepository) *CreateAdminUseCase {
+	return &CreateAdminUseCase{users: users, roles: roles}
 }
 
 func (uc *CreateAdminUseCase) Execute(ctx context.Context, in CreateAdminInput) (auth.User, error) {
@@ -53,10 +53,13 @@ func (uc *CreateAdminUseCase) Execute(ctx context.Context, in CreateAdminInput) 
 	if len(in.Password) < 6 {
 		return auth.User{}, ErrPasswordTooShort
 	}
-	for _, p := range in.Permissions {
-		if _, ok := validPermissions[p]; !ok {
-			return auth.User{}, ErrInvalidPermission
-		}
+	if _, ok := validAdminRoles[in.Role]; !ok {
+		return auth.User{}, ErrInvalidRole
+	}
+
+	perms, err := uc.roles.GetPermissions(ctx, in.Role)
+	if err != nil {
+		return auth.User{}, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -64,17 +67,12 @@ func (uc *CreateAdminUseCase) Execute(ctx context.Context, in CreateAdminInput) 
 		return auth.User{}, err
 	}
 
-	perms := in.Permissions
-	if perms == nil {
-		perms = []string{}
-	}
-
 	return uc.users.Create(ctx, auth.User{
 		FirstName:   firstName,
 		LastName:    lastName,
 		Email:       email,
 		Password:    string(hash),
-		Role:        auth.RoleAdmin,
+		Role:        in.Role,
 		Permissions: perms,
 	})
 }

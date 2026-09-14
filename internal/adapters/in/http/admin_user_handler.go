@@ -10,19 +10,19 @@ import (
 )
 
 type AdminUserHandler struct {
-	create            *appAdmin.CreateAdminUseCase
-	list              *appAdmin.ListAdminsUseCase
-	updatePermissions *appAdmin.UpdatePermissionsUseCase
-	delete            *appAdmin.DeleteAdminUseCase
+	create     *appAdmin.CreateAdminUseCase
+	list       *appAdmin.ListAdminsUseCase
+	updateRole *appAdmin.UpdateRoleUseCase
+	delete     *appAdmin.DeleteAdminUseCase
 }
 
 func NewAdminUserHandler(
 	create *appAdmin.CreateAdminUseCase,
 	list *appAdmin.ListAdminsUseCase,
-	updatePermissions *appAdmin.UpdatePermissionsUseCase,
+	updateRole *appAdmin.UpdateRoleUseCase,
 	delete *appAdmin.DeleteAdminUseCase,
 ) *AdminUserHandler {
-	return &AdminUserHandler{create: create, list: list, updatePermissions: updatePermissions, delete: delete}
+	return &AdminUserHandler{create: create, list: list, updateRole: updateRole, delete: delete}
 }
 
 type adminUserResponse struct {
@@ -64,11 +64,11 @@ func (h *AdminUserHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		FirstName   string   `json:"first_name"`
-		LastName    string   `json:"last_name"`
-		Email       string   `json:"email"`
-		Password    string   `json:"password"`
-		Permissions []string `json:"permissions"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Email     string `json:"email"`
+		Password  string `json:"password"`
+		Role      string `json:"role"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
@@ -76,11 +76,11 @@ func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.create.Execute(r.Context(), appAdmin.CreateAdminInput{
-		FirstName:   body.FirstName,
-		LastName:    body.LastName,
-		Email:       body.Email,
-		Password:    body.Password,
-		Permissions: body.Permissions,
+		FirstName: body.FirstName,
+		LastName:  body.LastName,
+		Email:     body.Email,
+		Password:  body.Password,
+		Role:      body.Role,
 	})
 	if err != nil {
 		switch {
@@ -88,7 +88,7 @@ func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusConflict, err.Error())
 		case errors.Is(err, appAdmin.ErrInvalidName),
 			errors.Is(err, appAdmin.ErrPasswordTooShort),
-			errors.Is(err, appAdmin.ErrInvalidPermission):
+			errors.Is(err, appAdmin.ErrInvalidRole):
 			Error(w, http.StatusUnprocessableEntity, err.Error())
 		default:
 			Error(w, http.StatusInternalServerError, "error interno del servidor")
@@ -98,7 +98,7 @@ func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, newAdminUserResponse(user))
 }
 
-func (h *AdminUserHandler) UpdatePermissions(w http.ResponseWriter, r *http.Request) {
+func (h *AdminUserHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		Error(w, http.StatusBadRequest, "id inválido")
@@ -106,21 +106,21 @@ func (h *AdminUserHandler) UpdatePermissions(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		Permissions []string `json:"permissions"`
+		Role string `json:"role"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
 
-	if err := h.updatePermissions.Execute(r.Context(), appAdmin.UpdatePermissionsInput{
-		UserID:      id,
-		Permissions: body.Permissions,
+	if err := h.updateRole.Execute(r.Context(), appAdmin.UpdateRoleInput{
+		UserID: id,
+		Role:   body.Role,
 	}); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrUserNotFound):
 			Error(w, http.StatusNotFound, "usuario no encontrado")
-		case errors.Is(err, appAdmin.ErrInvalidPermission):
+		case errors.Is(err, appAdmin.ErrInvalidRole):
 			Error(w, http.StatusUnprocessableEntity, err.Error())
 		default:
 			Error(w, http.StatusInternalServerError, "error interno del servidor")

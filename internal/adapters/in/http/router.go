@@ -85,10 +85,10 @@ func NewRouter(h Handlers) http.Handler {
 		r.With(h.AuthMiddleware.RequireAuth).Get("/me", h.Auth.Me)
 	})
 
-	// Scrydex — consultas en vivo a la API externa (admin y superadmin)
+	// Scrydex — consultas en vivo a la API externa (solo admin)
 	r.Route("/scrydex", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
-		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin))
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/cards", h.Pokemon.Search)
 			r.Post("/cards/{id}", h.Pokemon.FetchOne)
@@ -143,10 +143,12 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.Sales.ListSales)
 	})
 
-	// Admin — sincronización e importación (admin y superadmin)
+	// Admin — sincronización e importación (admin, colaborador y sup_colaborador)
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
-		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin))
+		r.Use(h.AuthMiddleware.RequireRole(
+			auth.RoleAdmin, auth.RoleColaborador, auth.RoleSupColaborador,
+		))
 
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermCatalogo)).
 			Post("/cards/import-listing", h.Pokemon.ImportToListing)
@@ -182,16 +184,14 @@ func NewRouter(h Handlers) http.Handler {
 		})
 	})
 
-	// Superadmin — gestión de usuarios admin y sus permisos
-	r.Route("/superadmin", func(r chi.Router) {
+	// Admin — gestión de usuarios colaborador/sup_colaborador
+	r.Route("/admin/users", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
-		r.Use(h.AuthMiddleware.RequireRole(auth.RoleSuperAdmin))
-		r.Route("/users", func(r chi.Router) {
-			r.Get("/", h.AdminUsers.List)
-			r.Post("/", h.AdminUsers.Create)
-			r.Patch("/{id}/permissions", h.AdminUsers.UpdatePermissions)
-			r.Delete("/{id}", h.AdminUsers.Delete)
-		})
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
+		r.Get("/", h.AdminUsers.List)
+		r.Post("/", h.AdminUsers.Create)
+		r.Patch("/{id}/role", h.AdminUsers.UpdateRole)
+		r.Delete("/{id}", h.AdminUsers.Delete)
 	})
 
 	return r

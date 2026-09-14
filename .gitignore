@@ -10,3 +10,4 @@ dist/
 *.log
 
 docs/
+graphify-out/

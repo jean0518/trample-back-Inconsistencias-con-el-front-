@@ -12,12 +12,11 @@ type UpdateRoleInput struct {
 }
 
 type UpdateRoleUseCase struct {
-	users out.UserRepository
-	roles out.RoleRepository
+	staff out.AdminUserRepository
 }
 
-func NewUpdateRoleUseCase(users out.UserRepository, roles out.RoleRepository) *UpdateRoleUseCase {
-	return &UpdateRoleUseCase{users: users, roles: roles}
+func NewUpdateRoleUseCase(staff out.AdminUserRepository) *UpdateRoleUseCase {
+	return &UpdateRoleUseCase{staff: staff}
 }
 
 func (uc *UpdateRoleUseCase) Execute(ctx context.Context, in UpdateRoleInput) error {
@@ -25,10 +24,10 @@ func (uc *UpdateRoleUseCase) Execute(ctx context.Context, in UpdateRoleInput) er
 		return ErrInvalidRole
 	}
 
-	perms, err := uc.roles.GetPermissions(ctx, in.Role)
-	if err != nil {
-		return err
+	perms, ok := DefaultPermissions(in.Role)
+	if !ok {
+		return ErrInvalidRole
 	}
 
-	return uc.users.UpdateRole(ctx, in.UserID, in.Role, perms)
+	return uc.staff.UpdateRole(ctx, in.UserID, in.Role, perms)
 }

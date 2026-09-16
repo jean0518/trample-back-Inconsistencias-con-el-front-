@@ -11,16 +11,18 @@ import (
 
 type OwnerHandler struct {
 	create *appOwner.CreateOwnerUseCase
+	update *appOwner.UpdateOwnerUseCase
 	list   *appOwner.ListOwnersUseCase
 	delete *appOwner.DeleteOwnerUseCase
 }
 
 func NewOwnerHandler(
 	create *appOwner.CreateOwnerUseCase,
+	update *appOwner.UpdateOwnerUseCase,
 	list *appOwner.ListOwnersUseCase,
 	delete *appOwner.DeleteOwnerUseCase,
 ) *OwnerHandler {
-	return &OwnerHandler{create: create, list: list, delete: delete}
+	return &OwnerHandler{create: create, update: update, list: list, delete: delete}
 }
 
 type ownerResponse struct {
@@ -36,6 +38,12 @@ type createOwnerRequest struct {
 	Phone     string `json:"phone"`
 	Email     string `json:"email"`
 	IsDefault *bool  `json:"is_default,omitempty"`
+}
+
+type updateOwnerRequest struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+	Email string `json:"email"`
 }
 
 func newOwnerResponse(o owner.Owner) ownerResponse {
@@ -100,6 +108,45 @@ func (h *OwnerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusCreated, newOwnerResponse(o))
+}
+
+// Update actualiza la información de un propietario (incluido el predeterminado).
+//
+//	@Summary      Actualizar propietario
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path  int                true  "ID del propietario"
+//	@Param        body  body  updateOwnerRequest true  "Datos a actualizar"
+//	@Success      200   {object}  ownerResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Router       /admin/owners/{id} [patch]
+func (h *OwnerHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+
+	var body updateOwnerRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+
+	o, err := h.update.Execute(r.Context(), id, owner.UpdateInput{Name: body.Name, Phone: body.Phone, Email: body.Email})
+	if err != nil {
+		if errors.Is(err, owner.ErrNotFound) {
+			Error(w, http.StatusNotFound, err.Error())
+			return
+		}
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, newOwnerResponse(o))
 }
 
 // Delete elimina un propietario (no el predeterminado).

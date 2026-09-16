@@ -33,17 +33,11 @@ func (uc *CreateListingUseCase) DefaultOwnerID(ctx context.Context) (int64, erro
 }
 
 func (uc *CreateListingUseCase) Execute(ctx context.Context, input listing.CreateInput) (listing.Listing, error) {
+	// El handler resuelve el propietario (provisto o predeterminado); aquí solo
+	// se garantiza que venga uno válido. La FK de inventory_listings.owner_id
+	// respalda la integridad si el ID no existe.
 	if input.OwnerID <= 0 {
-		ownerID, err := uc.DefaultOwnerID(ctx)
-		if err != nil {
-			return listing.Listing{}, err
-		}
-		input.OwnerID = ownerID
-	} else {
-		// Validar que el propietario exista.
-		if _, err := uc.owners.FindByID(ctx, input.OwnerID); err != nil {
-			return listing.Listing{}, err
-		}
+		return listing.Listing{}, fmt.Errorf("owner_id es requerido")
 	}
 	rate, err := uc.trm.GetRate(ctx)
 	if err != nil {

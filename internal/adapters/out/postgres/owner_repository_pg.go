@@ -32,6 +32,24 @@ func (r *OwnerRepository) Create(ctx context.Context, input owner.CreateInput) (
 	return o, nil
 }
 
+func (r *OwnerRepository) Update(ctx context.Context, id int64, input owner.UpdateInput) (owner.Owner, error) {
+	var o owner.Owner
+	err := r.db.QueryRow(ctx, `
+		UPDATE owners
+		SET name = $2, phone = $3, email = $4, updated_at = now()
+		WHERE id = $1
+		RETURNING id, name, phone, email, is_default
+	`, id, input.Name, input.Phone, input.Email,
+	).Scan(&o.ID, &o.Name, &o.Phone, &o.Email, &o.IsDefault)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return owner.Owner{}, owner.ErrNotFound
+		}
+		return owner.Owner{}, fmt.Errorf("actualizar owner %d: %w", id, err)
+	}
+	return o, nil
+}
+
 func (r *OwnerRepository) ListAll(ctx context.Context) ([]owner.Owner, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, name, phone, email, is_default, created_at, updated_at

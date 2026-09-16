@@ -2,7 +2,6 @@ package reservation
 
 import (
 	"context"
-	"errors"
 
 	"trample-back/internal/domain/reservation"
 	"trample-back/internal/ports/out"
@@ -50,11 +49,6 @@ func (uc *CartUseCase) Remove(ctx context.Context, userID, id int64) error {
 	return uc.repo.Remove(ctx, userID, id)
 }
 
-// AvailableStock devuelve el stock realmente comprable de una carta+idioma.
-func (uc *CartUseCase) AvailableStock(ctx context.Context, cardID int64, language string) (int, error) {
-	return uc.repo.AvailableStock(ctx, cardID, language)
-}
-
 // ListLogs devuelve el historial de reservas (panel admin), opcionalmente
 // filtrado por estado (reserved | returned | sold).
 func (uc *CartUseCase) ListLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error) {
@@ -72,11 +66,4 @@ func (uc *CartUseCase) ListLogs(ctx context.Context, status string, limit, offse
 		logs = []reservation.ReservationLog{}
 	}
 	return logs, nil
-}
-
-var ErrNotFound = reservation.ErrNotFound
-var ErrInsufficientStock = reservation.ErrInsufficientStock
-
-func IsInsufficientStock(err error) bool {
-	return errors.Is(err, reservation.ErrInsufficientStock)
 }

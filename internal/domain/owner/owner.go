@@ -23,3 +23,9 @@ type CreateInput struct {
 	Email     string
 	IsDefault bool
 }
+
+type UpdateInput struct {
+	Name  string
+	Phone string
+	Email string
+}

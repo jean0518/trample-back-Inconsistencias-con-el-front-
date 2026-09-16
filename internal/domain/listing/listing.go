@@ -13,7 +13,6 @@ type Listing struct {
 	SellerID  int64
 	VariantID int64
 	OwnerID   int64
-	GameID    int64
 	GameName  string
 	// Datos de la carta para el inventario legible (JOIN con cards/expansions).
 	CardID int64

@@ -46,9 +46,9 @@ func (r *SaleRepository) Create(ctx context.Context, s sale.Sale) (sale.Sale, er
 		err := tx.QueryRow(ctx, `
 			INSERT INTO sale_items (sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			RETURNING id, sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd
+			RETURNING listing_id, card_id, card_name, language, quantity, price_cop, price_usd
 		`, created.ID, it.ListingID, it.CardID, it.CardName, it.Language, it.Quantity, it.PriceCOP, it.PriceUSD).Scan(
-			&item.ID, &item.SaleID, &item.ListingID, &item.CardID, &item.CardName,
+			&item.ListingID, &item.CardID, &item.CardName,
 			&item.Language, &item.Quantity, &item.PriceCOP, &item.PriceUSD,
 		)
 		if err != nil {
@@ -95,7 +95,7 @@ func scanSale(row pgx.Row) (sale.Sale, error) {
 
 func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd
+		SELECT listing_id, card_id, card_name, language, quantity, price_cop, price_usd
 		FROM sale_items WHERE sale_id = $1 ORDER BY id
 	`, s.ID)
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	var items []sale.SaleItem
 	for rows.Next() {
 		var it sale.SaleItem
-		if err := rows.Scan(&it.ID, &it.SaleID, &it.ListingID, &it.CardID, &it.CardName,
+		if err := rows.Scan(&it.ListingID, &it.CardID, &it.CardName,
 			&it.Language, &it.Quantity, &it.PriceCOP, &it.PriceUSD); err != nil {
 			return err
 		}

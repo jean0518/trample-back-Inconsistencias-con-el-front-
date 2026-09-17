@@ -106,7 +106,7 @@ func (h *ListingHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
-	listings, err := h.list.Execute(r.Context(), user.Role, user.ID, limit, offset)
+	listings, err := h.list.Execute(r.Context(), user.Role, user.Permissions, user.ID, limit, offset)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "error interno del servidor")
 		return

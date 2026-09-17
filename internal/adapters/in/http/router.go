@@ -143,43 +143,45 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.Sales.ListSales)
 	})
 
-	// Admin — sincronización e importación (admin, colaborador y sup_colaborador)
+	// Admin — sincronización e importación (todo el staff del panel)
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
-		r.Use(h.AuthMiddleware.RequireRole(
-			auth.RoleAdmin, auth.RoleColaborador, auth.RoleSupColaborador,
-		))
+		r.Use(h.AuthMiddleware.RequireStaff)
 
-		r.With(h.AuthMiddleware.RequirePermission(auth.PermCatalogo)).
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermInventario)).
 			Post("/cards/import-listing", h.Pokemon.ImportToListing)
 
 		r.Route("/owners", func(r chi.Router) {
 			r.Use(h.AuthMiddleware.RequirePermission(auth.PermPropietarios))
 			r.Get("/", h.Owners.List)
 			r.Post("/", h.Owners.Create)
+			r.Patch("/{id}", h.Owners.Update)
 			r.Delete("/{id}", h.Owners.Delete)
 		})
 
-		r.With(h.AuthMiddleware.RequirePermission(auth.PermVentas)).
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermReservas)).
 			Get("/reservation-logs", h.Cart.ListReservationLogs)
-		r.With(h.AuthMiddleware.RequirePermission(auth.PermVentas)).
+		r.Get("/sales", h.Sales.ListAdminSales)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermResumen)).
 			Get("/sales-stats", h.Sales.SalesStats)
 
+		r.Get("/panels", h.AdminUsers.ListPanels)
+
 		r.Route("/pokemon", func(r chi.Router) {
-			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermInventario))
 			r.Post("/expansions/sync", h.Pokemon.SyncExpansions)
 			r.Put("/cards/{id}", h.Pokemon.RefreshCard)
 			r.Delete("/cards/{id}", h.Pokemon.DeleteCard)
 		})
 		r.Route("/magic", func(r chi.Router) {
-			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermInventario))
 			r.Post("/expansions/sync", h.Magic.SyncExpansions)
 			r.Post("/cards/import-listing", h.Magic.ImportToListing)
 			r.Put("/cards/{id}", h.Magic.RefreshCard)
 			r.Delete("/cards/{id}", h.Magic.DeleteCard)
 		})
 		r.Route("/riftbound", func(r chi.Router) {
-			r.Use(h.AuthMiddleware.RequirePermission(auth.PermCatalogo))
+			r.Use(h.AuthMiddleware.RequirePermission(auth.PermInventario))
 			r.Post("/expansions/sync", h.Riftbound.SyncExpansions)
 		})
 	})
@@ -191,6 +193,8 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.AdminUsers.List)
 		r.Post("/", h.AdminUsers.Create)
 		r.Patch("/{id}/role", h.AdminUsers.UpdateRole)
+		r.Patch("/{id}/permissions", h.AdminUsers.UpdatePermissions)
+		r.Patch("/{id}", h.AdminUsers.Update)
 		r.Delete("/{id}", h.AdminUsers.Delete)
 	})
 

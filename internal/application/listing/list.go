@@ -15,13 +15,28 @@ func NewListListingsUseCase(repo out.ListingRepository) *ListListingsUseCase {
 	return &ListListingsUseCase{repo: repo}
 }
 
-// Execute devuelve el inventario. Los administradores ven el listing general de
-// todos los vendedores; el resto de usuarios solo sus propios listings.
-func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, sellerID int64, limit, offset int) ([]listing.Listing, error) {
+// canSeeAllListings indica si el usuario ve el inventario general de todos los
+// vendedores: el admin siempre, y cualquier staff con el panel de inventario.
+func canSeeAllListings(role string, perms []string) bool {
+	if role == auth.RoleAdmin {
+		return true
+	}
+	for _, p := range perms {
+		if p == auth.PermInventario {
+			return true
+		}
+	}
+	return false
+}
+
+// Execute devuelve el inventario. El admin y el staff con el panel de
+// inventario ven el listing general de todos los vendedores; el resto de
+// usuarios solo sus propios listings.
+func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, perms []string, sellerID int64, limit, offset int) ([]listing.Listing, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	if role == auth.RoleAdmin {
+	if canSeeAllListings(role, perms) {
 		return uc.repo.ListAll(ctx, limit, offset)
 	}
 	return uc.repo.ListBySeller(ctx, sellerID, limit, offset)

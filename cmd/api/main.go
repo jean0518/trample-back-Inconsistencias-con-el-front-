@@ -79,6 +79,7 @@ func main() {
 	createListingUC := appListing.NewCreateListingUseCase(listingRepo, ownerRepo, trmClient)
 	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
 	updateStockUC := appListing.NewUpdateStockUseCase(listingRepo)
+	editListingUC := appListing.NewEditListingUseCase(listingRepo, trmClient)
 	deleteListingUC := appListing.NewDeleteListingUseCase(listingRepo)
 	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
 	updateOwnerUC := appOwner.NewUpdateOwnerUseCase(ownerRepo)
@@ -106,7 +107,7 @@ func main() {
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
-		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
+		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
 		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, updatePanelsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),

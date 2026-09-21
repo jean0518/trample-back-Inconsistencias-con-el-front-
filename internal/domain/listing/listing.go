@@ -57,3 +57,15 @@ type UpdateStockInput struct {
 	SellerID int64
 	Quantity int
 }
+
+// EditInput actualiza los campos editables de un listing: precio, cantidad,
+// idioma y propietario. price_cop se recalcula con la TRM en el use case.
+type EditInput struct {
+	ID       int64
+	SellerID int64
+	Quantity int
+	PriceUSD float64
+	PriceCOP float64
+	Language string
+	OwnerID  int64
+}

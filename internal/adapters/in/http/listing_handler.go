@@ -13,6 +13,7 @@ type ListingHandler struct {
 	create *appListing.CreateListingUseCase
 	list   *appListing.ListListingsUseCase
 	update *appListing.UpdateStockUseCase
+	edit   *appListing.EditListingUseCase
 	delete *appListing.DeleteListingUseCase
 }
 
@@ -20,9 +21,10 @@ func NewListingHandler(
 	create *appListing.CreateListingUseCase,
 	list *appListing.ListListingsUseCase,
 	update *appListing.UpdateStockUseCase,
+	edit *appListing.EditListingUseCase,
 	delete *appListing.DeleteListingUseCase,
 ) *ListingHandler {
-	return &ListingHandler{create: create, list: list, update: update, delete: delete}
+	return &ListingHandler{create: create, list: list, update: update, edit: edit, delete: delete}
 }
 
 type listingResponse struct {
@@ -222,6 +224,71 @@ func (h *ListingHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
 		ID:       id,
 		SellerID: user.ID,
 		Quantity: *body.Quantity,
+	})
+	if err != nil {
+		if errors.Is(err, listing.ErrNotFound) {
+			Error(w, http.StatusNotFound, err.Error())
+			return
+		}
+		Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	JSON(w, http.StatusOK, newListingResponse(l))
+}
+
+type editListingRequest struct {
+	Quantity int     `json:"quantity"`
+	PriceUSD float64 `json:"price_usd"`
+	Language string  `json:"language"`
+	OwnerID  int64   `json:"owner_id"`
+}
+
+// Edit actualiza precio, cantidad, idioma y propietario de un listing del
+// vendedor autenticado.
+//
+//	@Summary      Editar listing
+//	@Tags         listings
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path  int                true  "ID del listing"
+//	@Param        body  body  editListingRequest true  "Campos a actualizar"
+//	@Success      200   {object}  listingResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Router       /listings/{id} [put]
+func (h *ListingHandler) Edit(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+
+	var body editListingRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	if body.PriceUSD <= 0 || body.Language == "" || body.OwnerID <= 0 {
+		Error(w, http.StatusBadRequest, "price_usd, language y owner_id son obligatorios")
+		return
+	}
+
+	l, err := h.edit.Execute(r.Context(), listing.EditInput{
+		ID:       id,
+		SellerID: user.ID,
+		Quantity: body.Quantity,
+		PriceUSD: body.PriceUSD,
+		Language: body.Language,
+		OwnerID:  body.OwnerID,
 	})
 	if err != nil {
 		if errors.Is(err, listing.ErrNotFound) {

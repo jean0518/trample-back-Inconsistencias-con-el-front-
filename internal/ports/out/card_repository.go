@@ -23,9 +23,10 @@ type ListCardsParams struct {
 // StaleCardRef identifica una carta cuyo precio no se consulta en Scrydex
 // hace más de un umbral dado (o nunca se consultó).
 type StaleCardRef struct {
-	ID         int64
-	GameCode   string
-	ExternalID string
+	ID                  int64
+	GameCode            string
+	ExternalID          string
+	ExpansionExternalID string
 }
 
 type CardRepository interface {

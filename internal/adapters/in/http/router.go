@@ -91,10 +91,12 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Route("/pokemon", func(r chi.Router) {
 			r.Post("/cards", h.Pokemon.Search)
+			r.Post("/cards/price-by-language", h.Pokemon.PriceByLanguage)
 			r.Post("/cards/{id}", h.Pokemon.FetchOne)
 		})
 		r.Route("/magic", func(r chi.Router) {
 			r.Post("/cards", h.Magic.Search)
+			r.Post("/cards/price-by-language", h.Magic.PriceByLanguage)
 			r.Post("/cards/{id}", h.Magic.FetchOne)
 		})
 
@@ -124,6 +126,7 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Get("/", h.Listings.List)
 		r.Post("/", h.Listings.Create)
+		r.Put("/{id}", h.Listings.Edit)
 		r.Patch("/{id}", h.Listings.UpdateStock)
 		r.Delete("/{id}", h.Listings.Delete)
 	})

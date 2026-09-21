@@ -1,6 +1,7 @@
 package http
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -64,7 +65,7 @@ func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 		Supertype:     body.Supertype,
 	})
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{
@@ -72,6 +73,78 @@ func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 		"total":     len(result.Cards),
 		"cards":     result.Cards,
 	})
+}
+
+// PriceByLanguage busca el precio de una carta en un idioma específico.
+// El front lo usa al seleccionar un idioma distinto de inglés/español.
+//
+//	@Summary      Precio de carta Pokémon por idioma
+//	@Tags         pokemon
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,language=string,variants=[]string}  true  "Filtros con idioma"
+//	@Success      200   {object}  catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/pokemon/cards/price-by-language [post]
+func (h *PokemonHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name          string   `json:"name"`
+		ExpansionCode string   `json:"expansion_code"`
+		Rarity        string   `json:"rarity"`
+		Language      string   `json:"language"`
+		Variants      []string `json:"variants"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+	if body.Name == "" || body.Language == "" {
+		Error(w, http.StatusBadRequest, "name y language son requeridos")
+		return
+	}
+	slog.Info("price-by-language pokemon", slog.String("name", body.Name), slog.String("language", body.Language))
+
+	// Español: Scrydex no indexa cartas en español; se busca en inglés y se
+	// aplica el 80 % del precio de mercado.
+	if isSpanish(body.Language) {
+		result, err := h.search.Search(r.Context(), out.SearchParams{
+			GameCode: "pokemon",
+			Name:     body.Name,
+			Variants: body.Variants,
+		})
+		if err != nil || len(result.Cards) == 0 {
+			Error(w, http.StatusBadRequest, "carta no disponible")
+			return
+		}
+		card := applyPriceDiscount(result.Cards[0], 0.80)
+		JSON(w, http.StatusOK, card)
+		return
+	}
+
+	code := languageNameToCode(body.Language)
+	if code == "" {
+		Error(w, http.StatusBadRequest, "idioma no reconocido: "+body.Language)
+		return
+	}
+	// No se filtra por expansion_code: los sets japoneses tienen códigos
+	// distintos a los ingleses, así que la búsqueda combinada no devuelve nada.
+	result, err := h.search.Search(r.Context(), out.SearchParams{
+		GameCode:     "pokemon",
+		Name:         body.Name,
+		Variants:     body.Variants,
+		LanguageCode: code,
+	})
+	if err != nil {
+		slog.Error("price-by-language scrydex error", slog.Any("err", err))
+		Error(w, http.StatusBadRequest, friendlyErr(err))
+		return
+	}
+	if len(result.Cards) == 0 {
+		slog.Info("price-by-language sin resultados", slog.String("name", body.Name), slog.String("code", code))
+		Error(w, http.StatusBadRequest, "carta no disponible en ese idioma")
+		return
+	}
+	JSON(w, http.StatusOK, result.Cards[0])
 }
 
 // FetchOne obtiene una carta de Pokémon por ID.
@@ -95,7 +168,7 @@ func (h *PokemonHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	}
 	card, err := h.search.FetchOne(r.Context(), "pokemon", chi.URLParam(r, "id"), body.Variants)
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, card)
@@ -192,7 +265,7 @@ func (h *PokemonHandler) ImportToListing(w http.ResponseWriter, r *http.Request)
 
 	listings, err := h.importListing.Execute(r.Context(), user.ID, body.Groups)
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{

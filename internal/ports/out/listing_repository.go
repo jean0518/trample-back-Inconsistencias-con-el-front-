@@ -19,5 +19,7 @@ type ListingRepository interface {
 	// AddQuantity suma cantidad al listing indicado y lo reactiva si estaba
 	// 'inactive'.
 	AddQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error)
+	// Edit actualiza precio, cantidad, idioma y propietario de un listing.
+	Edit(ctx context.Context, input listing.EditInput) (listing.Listing, error)
 	Delete(ctx context.Context, id, sellerID int64) error
 }

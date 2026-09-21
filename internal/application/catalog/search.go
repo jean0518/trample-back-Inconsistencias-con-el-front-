@@ -61,6 +61,16 @@ func (uc *SearchScrydex) Search(ctx context.Context, p out.SearchParams) (Search
 	return SearchResult{SearchID: id, Cards: cards}, nil
 }
 
+// FetchExpansionCards descarga todas las cartas de una expansión desde Scrydex
+// con TRM aplicado. Se usa para refrescar precios en lote.
+func (uc *SearchScrydex) FetchExpansionCards(ctx context.Context, gameCode, expansionExternalID string) ([]catalog.Card, error) {
+	cards, err := uc.scrydex.FetchExpansionCards(ctx, gameCode, expansionExternalID)
+	if err != nil {
+		return nil, err
+	}
+	return uc.applyTRM(ctx, cards)
+}
+
 func (uc *SearchScrydex) FetchOne(ctx context.Context, gameCode, externalID string, variants []string) (*catalog.Card, error) {
 	if gameCode == "" || externalID == "" {
 		return nil, fmt.Errorf("game_code y external_id son requeridos")

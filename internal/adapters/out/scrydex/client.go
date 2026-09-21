@@ -195,7 +195,7 @@ type scrydexMTGExp struct {
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
-	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type, p.Supertype)
+	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
 	cards, err := c.searchOnce(ctx, p.GameCode, q, p.Variants)
 	if err != nil {
 		return nil, err
@@ -205,7 +205,7 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 	// punto final en "pikachu."). Si la búsqueda conservada ya arrojó
 	// resultados (o la query alternativa es idéntica) no se vuelve a consultar.
 	if len(cards) == 0 {
-		fallback := buildQuery(p.GameCode, stripNameSymbols(p.Name), p.ExpansionCode, p.Rarity, p.Type, p.Supertype)
+		fallback := buildQuery(p.GameCode, stripNameSymbols(p.Name), p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
 		if fallback != q {
 			slog.Info("scrydex retry sin simbolos", slog.String("query", fallback))
 			cards, err = c.searchOnce(ctx, p.GameCode, fallback, p.Variants)
@@ -314,6 +314,62 @@ func (c *Client) FetchExpansions(ctx context.Context, gameCode string) ([]catalo
 		page++
 	}
 
+	return all, nil
+}
+
+// FetchExpansionCards descarga todas las cartas de una expansión con sus
+// precios haciendo las páginas necesarias (page_size=100).
+func (c *Client) FetchExpansionCards(ctx context.Context, gameCode, expansionExternalID string) ([]catalog.Card, error) {
+	const pageSize = 100
+	var all []catalog.Card
+	page := 1
+
+	for {
+		q := url.QueryEscape(fmt.Sprintf("expansion.id:%s", expansionExternalID))
+		if gameCode == "pokemon" {
+			q = url.QueryEscape(fmt.Sprintf(`expansion.id:%s -expansion.series:"Pokémon Pocket"`, expansionExternalID))
+		}
+		endpoint := fmt.Sprintf(
+			"%s%s/cards?q=%s&include=prices,images,variants&page_size=%d&page=%d",
+			baseURL, cardsPath(gameCode), q, pageSize, page,
+		)
+		slog.Info("scrydex expansion batch", slog.String("expansion", expansionExternalID), slog.Int("page", page))
+
+		var cards []catalog.Card
+		var total int
+
+		if gameCode == "mtg" {
+			var env struct {
+				Data       []scrydexMTGCard `json:"data"`
+				TotalCount int              `json:"total_count"`
+			}
+			if err := c.get(ctx, endpoint, &env); err != nil {
+				return nil, err
+			}
+			total = env.TotalCount
+			for _, raw := range env.Data {
+				cards = append(cards, toMTGCard(raw))
+			}
+		} else {
+			var env struct {
+				Data       []scrydexCard `json:"data"`
+				TotalCount int          `json:"total_count"`
+			}
+			if err := c.get(ctx, endpoint, &env); err != nil {
+				return nil, err
+			}
+			total = env.TotalCount
+			for _, raw := range env.Data {
+				cards = append(cards, toCard(raw))
+			}
+		}
+
+		all = append(all, cards...)
+		if len(all) >= total || len(cards) < pageSize {
+			break
+		}
+		page++
+	}
 	return all, nil
 }
 
@@ -525,7 +581,7 @@ func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype string) string {
+func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype, languageCode string) string {
 	var parts []string
 	if clause := buildNameClause(name); clause != "" {
 		parts = append(parts, clause)
@@ -539,12 +595,12 @@ func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype strin
 	if cardType != "" {
 		parts = append(parts, "types:"+quote(cardType))
 	}
-	// Supertipo (solo Pokémon): Pokémon, Trainer o Energy.
 	if supertype != "" && gameCode == "pokemon" {
 		parts = append(parts, "supertype:"+`"`+supertype+`"`)
 	}
-	// Excluye cartas de Pokémon TCG Pocket (mobile, distinto al TCG físico).
-	// Solo aplica a Pokémon: para mtg/riftbound el filtro no tiene sentido.
+	if languageCode != "" {
+		parts = append(parts, "language_code:"+quote(languageCode))
+	}
 	if gameCode == "pokemon" {
 		parts = append(parts, `-expansion.series:"Pokémon Pocket"`)
 	}

@@ -6,13 +6,13 @@ import (
 )
 
 type DeleteAdminUseCase struct {
-	users out.UserRepository
+	staff out.AdminUserRepository
 }
 
-func NewDeleteAdminUseCase(users out.UserRepository) *DeleteAdminUseCase {
-	return &DeleteAdminUseCase{users: users}
+func NewDeleteAdminUseCase(staff out.AdminUserRepository) *DeleteAdminUseCase {
+	return &DeleteAdminUseCase{staff: staff}
 }
 
 func (uc *DeleteAdminUseCase) Execute(ctx context.Context, id int64) error {
-	return uc.users.Delete(ctx, id)
+	return uc.staff.Delete(ctx, id)
 }

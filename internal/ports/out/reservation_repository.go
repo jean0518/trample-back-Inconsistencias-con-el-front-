@@ -30,9 +30,6 @@ type ReservationRepository interface {
 	// su stock vuelva a estar disponible. Devuelve la cantidad de reservas
 	// liberadas.
 	ReleaseExpired(ctx context.Context) (int64, error)
-	// AvailableStock devuelve las unidades disponibles (stock real menos
-	// reservas activas) de una carta en un idioma concreto.
-	AvailableStock(ctx context.Context, cardID int64, language string) (int, error)
 	// FindListingForReserve devuelve el listing activo más adecuado para
 	// reservar de una carta/idioma, opcionalmente filtrando por acabado
 	// (variantName).

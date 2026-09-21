@@ -2,7 +2,6 @@ package sale
 
 import "errors"
 
-var ErrNotFound = errors.New("venta no encontrada")
 var ErrEmptyCart = errors.New("el carrito no tiene items para confirmar")
 var ErrInvalidInput = errors.New("datos de la venta inválidos")
 var ErrReservationExpired = errors.New("una o más reservas del carrito expiraron o ya no están activas")
@@ -44,8 +43,6 @@ type Sale struct {
 // ListingID puede ser nil si la carta (listing) fue eliminada del inventario;
 // la venta se conserva gracias al snapshot de card_name/language/precios.
 type SaleItem struct {
-	ID        int64
-	SaleID    int64
 	ListingID *int64
 	CardID    int64
 	CardName  string

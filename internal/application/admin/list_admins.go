@@ -7,13 +7,13 @@ import (
 )
 
 type ListAdminsUseCase struct {
-	users out.UserRepository
+	staff out.AdminUserRepository
 }
 
-func NewListAdminsUseCase(users out.UserRepository) *ListAdminsUseCase {
-	return &ListAdminsUseCase{users: users}
+func NewListAdminsUseCase(staff out.AdminUserRepository) *ListAdminsUseCase {
+	return &ListAdminsUseCase{staff: staff}
 }
 
 func (uc *ListAdminsUseCase) Execute(ctx context.Context) ([]auth.User, error) {
-	return uc.users.ListAdmins(ctx)
+	return uc.staff.List(ctx)
 }

@@ -58,7 +58,8 @@ func main() {
 	expansionRepo := postgres.NewExpansionRepository(pool)
 	cardRepo := postgres.NewCardRepository(pool)
 	userRepo := postgres.NewUserRepository(pool)
-	roleRepo := postgres.NewRoleRepository(pool)
+	adminUserRepo := postgres.NewAdminUserRepository(pool)
+	panelRepo := postgres.NewPanelRepository(pool)
 	gameRepo := postgres.NewGameRepository(pool)
 	listingRepo := postgres.NewListingRepository(pool)
 	ownerRepo := postgres.NewOwnerRepository(pool)
@@ -78,14 +79,19 @@ func main() {
 	createListingUC := appListing.NewCreateListingUseCase(listingRepo, ownerRepo, trmClient)
 	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
 	updateStockUC := appListing.NewUpdateStockUseCase(listingRepo)
+	editListingUC := appListing.NewEditListingUseCase(listingRepo, trmClient)
 	deleteListingUC := appListing.NewDeleteListingUseCase(listingRepo)
 	createOwnerUC := appOwner.NewCreateOwnerUseCase(ownerRepo)
+	updateOwnerUC := appOwner.NewUpdateOwnerUseCase(ownerRepo)
 	listOwnersUC := appOwner.NewListOwnersUseCase(ownerRepo)
 	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
-	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo, roleRepo)
-	listAdminsUC := appAdmin.NewListAdminsUseCase(userRepo)
-	updateRoleUC := appAdmin.NewUpdateRoleUseCase(userRepo, roleRepo)
-	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(userRepo)
+	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo, adminUserRepo, panelRepo)
+	listAdminsUC := appAdmin.NewListAdminsUseCase(adminUserRepo)
+	updateRoleUC := appAdmin.NewUpdateRoleUseCase(adminUserRepo)
+	updatePanelsUC := appAdmin.NewUpdatePanelsUseCase(adminUserRepo, panelRepo)
+	updateAdminUserUC := appAdmin.NewUpdateAdminUserUseCase(userRepo, adminUserRepo, panelRepo)
+	panelsListUC := appAdmin.NewPanelsListUseCase(panelRepo)
+	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(adminUserRepo)
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
@@ -101,9 +107,9 @@ func main() {
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
-		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, deleteListingUC),
-		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, listOwnersUC, deleteOwnerUC),
-		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, deleteAdminUC),
+		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
+		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
+		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, updatePanelsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
 		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
 		AuthMiddleware: authMiddleware,

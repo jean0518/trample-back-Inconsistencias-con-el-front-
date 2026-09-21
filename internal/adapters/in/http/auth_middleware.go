@@ -129,6 +129,51 @@ func (m *AuthMiddleware) RequireRole(roles ...string) func(http.Handler) http.Ha
 	}
 }
 
+// RequireStaff deja pasar a cualquier rol de staff (todo lo que no sea
+// "customer"); los paneles asignados en admin_user_panels deciden después
+// qué secciones puede ver. Cubre también roles personalizados.
+func (m *AuthMiddleware) RequireStaff(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := AuthFromContext(r.Context())
+		if !ok {
+			Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if !auth.IsStaffRole(user.Role) {
+			Error(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAnyPermission permite el acceso si el usuario tiene alguno de los
+// permisos dados. El admin siempre pasa sin importar el permiso.
+func (m *AuthMiddleware) RequireAnyPermission(perms ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := AuthFromContext(r.Context())
+			if !ok {
+				Error(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if user.Role == auth.RoleAdmin {
+				next.ServeHTTP(w, r)
+				return
+			}
+			for _, p := range user.Permissions {
+				for _, wanted := range perms {
+					if p == wanted {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
+			}
+			Error(w, http.StatusForbidden, "forbidden")
+		})
+	}
+}
+
 // RequirePermission permite el acceso si el usuario tiene el permiso dado.
 // El admin siempre pasa sin importar el permiso.
 func (m *AuthMiddleware) RequirePermission(perm string) func(http.Handler) http.Handler {

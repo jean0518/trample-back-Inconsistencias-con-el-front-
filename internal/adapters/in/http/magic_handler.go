@@ -58,7 +58,7 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 		Type:          body.Type,
 	})
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{
@@ -68,7 +68,63 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /scrydex/magic/cards/{id}
+// PriceByLanguage busca el precio de una carta de Magic en un idioma específico.
+func (h *MagicHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name          string   `json:"name"`
+		ExpansionCode string   `json:"expansion_code"`
+		Rarity        string   `json:"rarity"`
+		Language      string   `json:"language"`
+		Variants      []string `json:"variants"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+	if body.Name == "" || body.Language == "" {
+		Error(w, http.StatusBadRequest, "name y language son requeridos")
+		return
+	}
+	code := languageNameToCode(body.Language)
+	if code == "" {
+		Error(w, http.StatusBadRequest, "idioma no reconocido: "+body.Language)
+		return
+	}
+	if isSpanish(body.Language) {
+		result, err := h.search.Search(r.Context(), out.SearchParams{
+			GameCode: "mtg",
+			Name:     body.Name,
+			Variants: body.Variants,
+		})
+		if err != nil {
+			Error(w, http.StatusBadRequest, friendlyErr(err))
+			return
+		}
+		if len(result.Cards) == 0 {
+			Error(w, http.StatusBadRequest, "carta no disponible")
+			return
+		}
+		JSON(w, http.StatusOK, applyPriceDiscount(result.Cards[0], 0.80))
+		return
+	}
+
+	result, err := h.search.Search(r.Context(), out.SearchParams{
+		GameCode:     "mtg",
+		Name:         body.Name,
+		Variants:     body.Variants,
+		LanguageCode: code,
+	})
+	if err != nil {
+		Error(w, http.StatusBadRequest, friendlyErr(err))
+		return
+	}
+	if len(result.Cards) == 0 {
+		Error(w, http.StatusBadRequest, "carta no disponible en ese idioma")
+		return
+	}
+	JSON(w, http.StatusOK, result.Cards[0])
+}
+
 func (h *MagicHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Variants []string `json:"variants"`
@@ -79,13 +135,12 @@ func (h *MagicHandler) FetchOne(w http.ResponseWriter, r *http.Request) {
 	}
 	card, err := h.search.FetchOne(r.Context(), "mtg", chi.URLParam(r, "id"), body.Variants)
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, card)
 }
 
-// POST /admin/magic/expansions/sync
 func (h *MagicHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) {
 	count, err := h.expansions.SyncMTG(r.Context())
 	if err != nil {
@@ -95,7 +150,6 @@ func (h *MagicHandler) SyncExpansions(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]int{"synced": count})
 }
 
-// GET /catalog/magic/expansions
 func (h *MagicHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
 	expansions, err := h.expansions.ListMTG(r.Context())
 	if err != nil {
@@ -105,7 +159,6 @@ func (h *MagicHandler) ListExpansions(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, expansions)
 }
 
-// DELETE /admin/magic/cards/{id}
 func (h *MagicHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -119,7 +172,6 @@ func (h *MagicHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]string{"deleted": chi.URLParam(r, "id")})
 }
 
-// POST /admin/magic/cards/import-listing
 func (h *MagicHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {
 	user, ok := AuthFromContext(r.Context())
 	if !ok {
@@ -137,7 +189,7 @@ func (h *MagicHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {
 
 	listings, err := h.importListing.Execute(r.Context(), user.ID, body.Groups)
 	if err != nil {
-		Error(w, http.StatusBadRequest, err.Error())
+		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{
@@ -146,7 +198,6 @@ func (h *MagicHandler) ImportToListing(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PUT /admin/magic/cards/{id}
 func (h *MagicHandler) RefreshCard(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

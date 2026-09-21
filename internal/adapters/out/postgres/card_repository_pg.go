@@ -382,7 +382,7 @@ func (r *CardRepository) GetExternalID(ctx context.Context, id int64) (string, e
 func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Duration, limit int) ([]out.StaleCardRef, error) {
 	threshold := time.Now().Add(-olderThan)
 	rows, err := r.db.Query(ctx, `
-		SELECT c.id, g.code, c.external_id
+		SELECT c.id, g.code, c.external_id, e.external_id
 		FROM cards c
 		JOIN games g ON g.id = c.game_id
 		JOIN expansions e ON e.id = c.expansion_id
@@ -392,7 +392,7 @@ func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Dura
 			WHERE il.variant_id = cv.id AND il.status = 'active' AND il.quantity > 0
 		)
 		AND NOT (g.code = 'pokemon' AND e.series = 'Pokémon Pocket')
-		GROUP BY c.id, g.code, c.external_id
+		GROUP BY c.id, g.code, c.external_id, e.external_id
 		HAVING MIN(cv.last_price_check_at) IS NULL OR MIN(cv.last_price_check_at) < $1
 		ORDER BY MIN(cv.last_price_check_at) ASC NULLS FIRST
 		LIMIT $2
@@ -405,7 +405,7 @@ func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Dura
 	var result []out.StaleCardRef
 	for rows.Next() {
 		var ref out.StaleCardRef
-		if err := rows.Scan(&ref.ID, &ref.GameCode, &ref.ExternalID); err != nil {
+		if err := rows.Scan(&ref.ID, &ref.GameCode, &ref.ExternalID, &ref.ExpansionExternalID); err != nil {
 			return nil, err
 		}
 		result = append(result, ref)

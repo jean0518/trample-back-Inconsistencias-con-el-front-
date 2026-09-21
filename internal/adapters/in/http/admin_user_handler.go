@@ -10,19 +10,25 @@ import (
 )
 
 type AdminUserHandler struct {
-	create     *appAdmin.CreateAdminUseCase
-	list       *appAdmin.ListAdminsUseCase
-	updateRole *appAdmin.UpdateRoleUseCase
-	delete     *appAdmin.DeleteAdminUseCase
+	create       *appAdmin.CreateAdminUseCase
+	list         *appAdmin.ListAdminsUseCase
+	updateRole   *appAdmin.UpdateRoleUseCase
+	updatePanels *appAdmin.UpdatePanelsUseCase
+	updateUser   *appAdmin.UpdateAdminUserUseCase
+	delete       *appAdmin.DeleteAdminUseCase
+	panels       *appAdmin.PanelsListUseCase
 }
 
 func NewAdminUserHandler(
 	create *appAdmin.CreateAdminUseCase,
 	list *appAdmin.ListAdminsUseCase,
 	updateRole *appAdmin.UpdateRoleUseCase,
+	updatePanels *appAdmin.UpdatePanelsUseCase,
+	updateUser *appAdmin.UpdateAdminUserUseCase,
 	delete *appAdmin.DeleteAdminUseCase,
+	panels *appAdmin.PanelsListUseCase,
 ) *AdminUserHandler {
-	return &AdminUserHandler{create: create, list: list, updateRole: updateRole, delete: delete}
+	return &AdminUserHandler{create: create, list: list, updateRole: updateRole, updatePanels: updatePanels, updateUser: updateUser, delete: delete, panels: panels}
 }
 
 type adminUserResponse struct {
@@ -64,23 +70,32 @@ func (h *AdminUserHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-		Email     string `json:"email"`
-		Password  string `json:"password"`
-		Role      string `json:"role"`
+		FirstName   string   `json:"first_name"`
+		LastName    string   `json:"last_name"`
+		Email       string   `json:"email"`
+		Password    string   `json:"password"`
+		Role        string   `json:"role"`
+		Permissions []string `json:"permissions"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
 
+	authUser, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	user, err := h.create.Execute(r.Context(), appAdmin.CreateAdminInput{
-		FirstName: body.FirstName,
-		LastName:  body.LastName,
-		Email:     body.Email,
-		Password:  body.Password,
-		Role:      body.Role,
+		FirstName:   body.FirstName,
+		LastName:    body.LastName,
+		Email:       body.Email,
+		Password:    body.Password,
+		Role:        body.Role,
+		Permissions: body.Permissions,
+		CreatedBy:   authUser.ID,
 	})
 	if err != nil {
 		switch {
@@ -88,7 +103,8 @@ func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusConflict, err.Error())
 		case errors.Is(err, appAdmin.ErrInvalidName),
 			errors.Is(err, appAdmin.ErrPasswordTooShort),
-			errors.Is(err, appAdmin.ErrInvalidRole):
+			errors.Is(err, appAdmin.ErrInvalidRole),
+			errors.Is(err, appAdmin.ErrInvalidPanel):
 			Error(w, http.StatusUnprocessableEntity, err.Error())
 		default:
 			Error(w, http.StatusInternalServerError, "error interno del servidor")
@@ -120,7 +136,93 @@ func (h *AdminUserHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, auth.ErrUserNotFound):
 			Error(w, http.StatusNotFound, "usuario no encontrado")
+		case errors.Is(err, auth.ErrIsAdmin):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
 		case errors.Is(err, appAdmin.ErrInvalidRole):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			Error(w, http.StatusInternalServerError, "error interno del servidor")
+		}
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"updated": strconv.FormatInt(id, 10)})
+}
+
+func (h *AdminUserHandler) UpdatePermissions(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+
+	var body struct {
+		Permissions []string `json:"permissions"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+
+	if err := h.updatePanels.Execute(r.Context(), appAdmin.UpdatePanelsInput{
+		UserID: id,
+		Panels: body.Permissions,
+	}); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
+			Error(w, http.StatusNotFound, "usuario no encontrado")
+		case errors.Is(err, auth.ErrIsAdmin):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, appAdmin.ErrInvalidPanel):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			Error(w, http.StatusInternalServerError, "error interno del servidor")
+		}
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"updated": strconv.FormatInt(id, 10)})
+}
+
+func (h *AdminUserHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+
+	var body struct {
+		FirstName   string   `json:"first_name"`
+		LastName    string   `json:"last_name"`
+		Email       string   `json:"email"`
+		Password    string   `json:"password"`
+		Role        string   `json:"role"`
+		Permissions []string `json:"permissions"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+
+	if err := h.updateUser.Execute(r.Context(), appAdmin.UpdateAdminUserInput{
+		UserID:      id,
+		FirstName:   body.FirstName,
+		LastName:    body.LastName,
+		Email:       body.Email,
+		Password:    body.Password,
+		Role:        body.Role,
+		Permissions: body.Permissions,
+	}); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrEmailTaken):
+			Error(w, http.StatusConflict, err.Error())
+		case errors.Is(err, auth.ErrUserNotFound):
+			Error(w, http.StatusNotFound, "usuario no encontrado")
+		case errors.Is(err, auth.ErrIsAdmin):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, appAdmin.ErrInvalidName),
+			errors.Is(err, appAdmin.ErrInvalidEmail),
+			errors.Is(err, appAdmin.ErrPasswordTooShort),
+			errors.Is(err, appAdmin.ErrInvalidRole),
+			errors.Is(err, appAdmin.ErrInvalidPanel):
 			Error(w, http.StatusUnprocessableEntity, err.Error())
 		default:
 			Error(w, http.StatusInternalServerError, "error interno del servidor")
@@ -146,4 +248,23 @@ func (h *AdminUserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, map[string]string{"deleted": strconv.FormatInt(id, 10)})
+}
+
+type panelResponse struct {
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+}
+
+func (h *AdminUserHandler) ListPanels(w http.ResponseWriter, r *http.Request) {
+	panels, err := h.panels.Execute(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "error interno del servidor")
+		return
+	}
+	resp := make([]panelResponse, 0, len(panels))
+	for _, p := range panels {
+		resp = append(resp, panelResponse{Code: p.Code, Name: p.Name, SortOrder: p.SortOrder})
+	}
+	JSON(w, http.StatusOK, resp)
 }

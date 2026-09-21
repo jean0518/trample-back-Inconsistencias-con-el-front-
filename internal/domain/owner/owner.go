@@ -1,9 +1,6 @@
 package owner
 
-import (
-	"errors"
-	"time"
-)
+import "errors"
 
 var ErrNotFound = errors.New("propietario no encontrado")
 
@@ -13,8 +10,6 @@ type Owner struct {
 	Phone     string
 	Email     string
 	IsDefault bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
 }
 
 type CreateInput struct {
@@ -22,4 +17,10 @@ type CreateInput struct {
 	Phone     string
 	Email     string
 	IsDefault bool
+}
+
+type UpdateInput struct {
+	Name  string
+	Phone string
+	Email string
 }

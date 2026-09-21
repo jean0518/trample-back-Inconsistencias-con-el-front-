@@ -24,7 +24,7 @@ func NewListingRepository(db *pgxpool.Pool) *ListingRepository {
 const inventoryListingSelect = `
 	SELECT
 		il.id, il.seller_id, il.variant_id, il.owner_id,
-		g.id AS game_id, g.name AS game_name,
+		g.name AS game_name,
 		c.id AS card_id, c.external_id AS card_external_id, c.number AS card_number,
 		c.name AS card_name,
 		COALESCE(
@@ -52,9 +52,9 @@ func scanListingRows(rows pgx.Rows) ([]listing.Listing, error) {
 	for rows.Next() {
 		var l listing.Listing
 		if err := rows.Scan(
-			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
-			&l.GameID, &l.GameName,
-			&l.CardID, &l.ExternalID, &l.CardNumber,
+&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
+		&l.GameName,
+		&l.CardID, &l.ExternalID, &l.CardNumber,
 			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
 			&l.OwnerName, &l.SellerName,
 			&l.Quantity, &l.PriceUSD, &l.PriceCOP,
@@ -196,6 +196,39 @@ func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.Updat
 			return listing.Listing{}, fmt.Errorf("listing %d: %w", input.ID, listing.ErrNotFound)
 		}
 		return listing.Listing{}, fmt.Errorf("sumar stock del listing %d: %w", input.ID, err)
+	}
+	return l, nil
+}
+
+func (r *ListingRepository) Edit(ctx context.Context, input listing.EditInput) (listing.Listing, error) {
+	var l listing.Listing
+	err := r.db.QueryRow(ctx, `
+		UPDATE inventory_listings
+		SET quantity  = $3,
+		    price_usd = $4,
+		    price_cop = $5,
+		    language  = $6,
+		    owner_id  = $7,
+		    status = CASE
+		        WHEN $3 = 0 THEN 'inactive'
+		        WHEN status = 'inactive' THEN 'active'
+		        ELSE status
+		    END,
+		    updated_at = now()
+		WHERE id = $1 AND seller_id = $2
+		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
+	`, input.ID, input.SellerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language, input.OwnerID,
+	).Scan(
+		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
+		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
+		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return listing.Listing{}, fmt.Errorf("listing %d: %w", input.ID, listing.ErrNotFound)
+		}
+		return listing.Listing{}, fmt.Errorf("editar listing %d: %w", input.ID, err)
 	}
 	return l, nil
 }

@@ -20,6 +20,20 @@ func NewSaleHandler(confirm *appSale.ConfirmSaleUseCase, list *appSale.ListSales
 	return &SaleHandler{confirm: confirm, list: list, stats: stats}
 }
 
+// canSeeAllSales indica si el usuario puede consultar el historial completo de
+// ventas: admins y el staff con acceso al panel de ventas o de pedidos.
+func canSeeAllSales(user AuthUser) bool {
+	if user.Role == auth.RoleAdmin || user.Role == auth.RoleColaborador || user.Role == auth.RoleSupColaborador {
+		return true
+	}
+	for _, p := range user.Permissions {
+		if p == auth.PermVentas || p == auth.PermPedidos {
+			return true
+		}
+	}
+	return false
+}
+
 type saleItemResponse struct {
 	ListingID  *int64  `json:"listing_id"`
 	CardID     int64   `json:"card_id"`
@@ -110,7 +124,7 @@ func (h *SaleHandler) ConfirmSale(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	isAdmin := user.Role == auth.RoleAdmin
+	isStaff := user.Role != auth.RoleCustomer
 
 	var body confirmSaleRequest
 	if err := Decode(r, &body); err != nil {
@@ -125,7 +139,7 @@ func (h *SaleHandler) ConfirmSale(w http.ResponseWriter, r *http.Request) {
 		City:          body.City,
 		Phone:         body.Phone,
 		PaymentMethod: body.PaymentMethod,
-		IsAdmin:       isAdmin,
+		IsAdmin:       isStaff,
 	}, body.ReservationIDs)
 	if err != nil {
 		switch {
@@ -144,10 +158,10 @@ func (h *SaleHandler) ConfirmSale(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, newSaleResponse(created))
 }
 
-// ListSales devuelve el historial: el admin ve todas, el cliente solo las
-// suyas.
+// ListSales devuelve el historial de pedidos SOLO del usuario autenticado
+// (aunque sea admin o staff, en su cuenta solo ven sus propias compras).
 //
-//	@Summary      Listar ventas
+//	@Summary      Historial de pedidos del usuario
 //	@Tags         sales
 //	@Produce      json
 //	@Security     BearerAuth
@@ -169,15 +183,50 @@ func (h *SaleHandler) ListSales(w http.ResponseWriter, r *http.Request) {
 		limit = 50
 	}
 
-	var (
-		items []sale.Sale
-		err   error
-	)
-	if user.Role == auth.RoleAdmin {
-		items, err = h.list.AllSales(r.Context(), limit, offset)
-	} else {
-		items, err = h.list.MySales(r.Context(), user.ID, limit, offset)
+	items, err := h.list.MySales(r.Context(), user.ID, limit, offset)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, err.Error())
+		return
 	}
+
+	resp := make([]saleResponse, 0, len(items))
+	for _, s := range items {
+		resp = append(resp, newSaleResponse(s))
+	}
+	JSON(w, http.StatusOK, resp)
+}
+
+// ListAdminSales devuelve el historial COMPLETO de ventas. Solo staff con
+// acceso a ventas o pedidos.
+//
+//	@Summary      Listado completo de ventas (staff)
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        limit   query  int  false  "Límite"  default(50)
+//	@Param        offset  query  int  false  "Offset"  default(0)
+//	@Success      200  {array}  saleResponse
+//	@Failure      401  {object}  object{error=string}
+//	@Failure      403  {object}  object{error=string}
+//	@Router       /admin/sales [get]
+func (h *SaleHandler) ListAdminSales(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !canSeeAllSales(user) {
+		Error(w, http.StatusForbidden, "no tienes acceso a ventas o pedidos")
+		return
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if limit <= 0 {
+		limit = 50
+	}
+
+	items, err := h.list.AllSales(r.Context(), limit, offset)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, err.Error())
 		return

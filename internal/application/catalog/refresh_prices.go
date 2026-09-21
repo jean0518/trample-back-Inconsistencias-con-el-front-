@@ -11,6 +11,7 @@ import (
 	"trample-back/internal/ports/out"
 )
 
+
 // PriceStaleAfter es cuánto puede pasar sin que una carta consulte su precio
 // en Scrydex antes de considerarse desactualizada.
 const PriceStaleAfter = 7 * 24 * time.Hour
@@ -75,29 +76,68 @@ func (r *PriceRefresher) TriggerLazy(ctx context.Context) {
 	}()
 }
 
-// RefreshStaleBatch busca hasta `limit` cartas con precio desactualizado
-// (más viejas primero) y las vuelve a consultar en Scrydex. Cartas que ya
-// tienen un refresco en curso se saltan.
+// expansionKey identifica una expansión de forma única para agrupar.
+type expansionKey struct {
+	gameCode            string
+	expansionExternalID string
+}
+
+// RefreshStaleBatch busca hasta `limit` cartas con precio desactualizado y
+// las refresca agrupando por expansión: 1 request a Scrydex por expansión en
+// lugar de 1 por carta. Esto reduce drásticamente las llamadas a la API.
 func (r *PriceRefresher) RefreshStaleBatch(ctx context.Context, olderThan time.Duration, limit int) (refreshed int, err error) {
 	stale, err := r.repo.ListStaleCards(ctx, olderThan, limit)
 	if err != nil {
 		return 0, fmt.Errorf("buscar cartas desactualizadas: %w", err)
 	}
+	if len(stale) == 0 {
+		return 0, nil
+	}
 
+	// Agrupa las cartas stale por (gameCode, expansionExternalID).
+	groups := make(map[expansionKey][]out.StaleCardRef)
 	for _, ref := range stale {
-		if !r.claim(ref.ID) {
+		k := expansionKey{ref.GameCode, ref.ExpansionExternalID}
+		groups[k] = append(groups[k], ref)
+	}
+
+	for key, refs := range groups {
+		// 1 request a Scrydex por expansión completa.
+		expCards, fetchErr := r.search.FetchExpansionCards(ctx, key.gameCode, key.expansionExternalID)
+		if fetchErr != nil {
+			r.log.Warn("no se pudo obtener expansión de Scrydex",
+				slog.String("game_code", key.gameCode),
+				slog.String("expansion", key.expansionExternalID),
+				slog.Any("error", fetchErr))
 			continue
 		}
-		_, refErr := refreshCard(ctx, r.search, r.repo, ref.GameCode, ref.ExternalID)
-		r.release(ref.ID)
-		if refErr != nil {
-			r.log.Warn("no se pudo refrescar precio",
-				slog.Int64("card_id", ref.ID),
-				slog.String("game_code", ref.GameCode),
-				slog.Any("error", refErr))
-			continue
+
+		// Índice externalID → carta para búsqueda O(1).
+		byExternalID := make(map[string]catalog.Card, len(expCards))
+		for _, c := range expCards {
+			byExternalID[c.ExternalID] = c
 		}
-		refreshed++
+
+		for _, ref := range refs {
+			card, ok := byExternalID[ref.ExternalID]
+			if !ok {
+				r.log.Warn("carta no encontrada en respuesta de expansión",
+					slog.String("external_id", ref.ExternalID))
+				continue
+			}
+			if !r.claim(ref.ID) {
+				continue
+			}
+			syncErr := r.repo.SyncCard(ctx, ref.GameCode, card)
+			r.release(ref.ID)
+			if syncErr != nil {
+				r.log.Warn("no se pudo sincronizar carta",
+					slog.Int64("card_id", ref.ID),
+					slog.Any("error", syncErr))
+				continue
+			}
+			refreshed++
+		}
 	}
 	return refreshed, nil
 }

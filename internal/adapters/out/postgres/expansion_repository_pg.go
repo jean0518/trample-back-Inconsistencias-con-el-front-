@@ -44,22 +44,6 @@ func (r *ExpansionRepository) SyncExpansions(ctx context.Context, gameCode strin
 	return nil
 }
 
-func (r *ExpansionRepository) FindByName(ctx context.Context, gameCode, name string) (*catalog.Expansion, error) {
-	var e catalog.Expansion
-	err := r.db.QueryRow(ctx, `
-		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
-		FROM expansions e
-		JOIN games g ON g.id = e.game_id
-		WHERE g.code = $1 AND e.name ILIKE $2
-		ORDER BY e.release_date DESC
-		LIMIT 1
-	`, gameCode, name).Scan(&e.ID, &e.GameID, &e.ExternalID, &e.Name, &e.Code, &e.Series, &e.Total, &e.ReleaseDate, &e.Logo, &e.Symbol)
-	if err != nil {
-		return nil, fmt.Errorf("expansión %q no encontrada en DB: %w", name, err)
-	}
-	return &e, nil
-}
-
 func (r *ExpansionRepository) ListExpansions(ctx context.Context, gameCode string) ([]catalog.Expansion, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url

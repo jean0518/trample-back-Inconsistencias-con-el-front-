@@ -31,16 +31,13 @@ type listingRow struct {
 	Quantity   int
 	PriceUSD   float64
 	PriceCOP   float64
-	Stock      int
 	CardImage  string
-	Status     string
 }
 
 const listingSelect = `
 	SELECT
 		il.id, c.id, c.name, cv.variant_name, il.language, il.quantity,
 		il.price_usd, il.price_cop,
-		il.quantity, il.status,
 		COALESCE(
 			(SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),
 			(SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
@@ -55,7 +52,7 @@ func scanListingRow(row pgx.Row) (listingRow, error) {
 	var l listingRow
 	err := row.Scan(
 		&l.ListingID, &l.CardID, &l.CardName, &l.VariantName, &l.Language,
-		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Stock, &l.Status, &l.CardImage,
+		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.CardImage,
 	)
 	return l, err
 }
@@ -96,9 +93,7 @@ func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardI
 		Quantity:   l.Quantity,
 		PriceUSD:   l.PriceUSD,
 		PriceCOP:   l.PriceCOP,
-		Stock:      l.Stock,
 		CardImage:  l.CardImage,
-		Status:     l.Status,
 	}, nil
 }
 
@@ -170,9 +165,9 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 		ON CONFLICT (user_id, listing_id) WHERE status = 'active'
 		DO UPDATE SET quantity = cart_reservations.quantity + EXCLUDED.quantity,
 		              expires_at = EXCLUDED.expires_at
-		RETURNING id, user_id, listing_id, quantity, expires_at, status, created_at
+		RETURNING id, listing_id, quantity, expires_at
 	`, input.UserID, info.ListingID, input.Quantity, expiresAt).Scan(
-		&res.ID, &res.UserID, &res.ListingID, &res.Quantity, &res.ExpiresAt, &res.Status, &res.CreatedAt,
+		&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 	)
 	if err != nil {
 		return reservation.Reservation{}, fmt.Errorf("crear/incrementar reserva: %w", err)
@@ -202,7 +197,6 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 		return reservation.Reservation{}, err
 	}
 
-	res.UserID = input.UserID
 	res.CardID = info.CardID
 	res.CardName = info.CardName
 	res.VariantName = info.VariantName
@@ -215,7 +209,7 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 
 func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID int64) ([]reservation.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT cr.id, cr.user_id, cr.listing_id, cr.quantity, cr.expires_at, cr.status, cr.created_at,
+		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
 		       il.language, il.price_usd, il.price_cop,
 		       COALESCE(
@@ -239,7 +233,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID int
 	for rows.Next() {
 		var res reservation.Reservation
 		if err := rows.Scan(
-			&res.ID, &res.UserID, &res.ListingID, &res.Quantity, &res.ExpiresAt, &res.Status, &res.CreatedAt,
+			&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 			&res.CardID, &res.CardName, &res.VariantName, &res.ListingID,
 			&res.Language, &res.PriceUSD, &res.PriceCOP,
 			&res.CardImage,
@@ -253,7 +247,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID int
 
 func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, userID int64, ids []int64) ([]reservation.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT cr.id, cr.user_id, cr.listing_id, cr.quantity, cr.expires_at, cr.status, cr.created_at,
+		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
 		       il.language, il.price_usd, il.price_cop,
 		       COALESCE(
@@ -277,7 +271,7 @@ func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, user
 	for rows.Next() {
 		var res reservation.Reservation
 		if err := rows.Scan(
-			&res.ID, &res.UserID, &res.ListingID, &res.Quantity, &res.ExpiresAt, &res.Status, &res.CreatedAt,
+			&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 			&res.CardID, &res.CardName, &res.VariantName, &res.ListingID,
 			&res.Language, &res.PriceUSD, &res.PriceCOP,
 			&res.CardImage,
@@ -491,29 +485,6 @@ func (r *ReservationRepository) ReleaseExpired(ctx context.Context) (int64, erro
 		return 0, err
 	}
 	return int64(len(exps)), nil
-}
-
-func (r *ReservationRepository) AvailableStock(ctx context.Context, cardID int64, language string) (int, error) {
-	var stock int
-	err := r.db.QueryRow(ctx, `
-		SELECT COALESCE(SUM(il.quantity) - COALESCE((
-			SELECT SUM(cr.quantity)
-			FROM cart_reservations cr
-			JOIN inventory_listings crl ON crl.id = cr.listing_id
-			JOIN card_variants crv ON crv.id = crl.variant_id
-			WHERE crv.card_id = $1 AND crl.language = $2 AND cr.status = 'active'
-		), 0), 0)::int
-		FROM inventory_listings il
-		JOIN card_variants lcv ON lcv.id = il.variant_id
-		WHERE lcv.card_id = $1 AND il.language = $2 AND il.status = 'active' AND il.quantity > 0
-	`, cardID, language).Scan(&stock)
-	if err != nil {
-		return 0, fmt.Errorf("calcular stock disponible: %w", err)
-	}
-	if stock < 0 {
-		stock = 0
-	}
-	return stock, nil
 }
 
 // logReservation registra un cambio de estado de una reserva en el historial.

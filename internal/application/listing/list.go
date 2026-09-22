@@ -32,7 +32,7 @@ func canSeeAllListings(role string, perms []string) bool {
 // Execute devuelve el inventario. El admin y el staff con el panel de
 // inventario ven el listing general de todos los vendedores; el resto de
 // usuarios solo sus propios listings.
-func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, perms []string, sellerID int64, limit, offset int) ([]listing.Listing, error) {
+func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, perms []string, sellerID string, limit, offset int) ([]listing.Listing, error) {
 	if limit <= 0 {
 		limit = 50
 	}

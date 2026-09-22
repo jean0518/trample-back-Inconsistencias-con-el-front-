@@ -39,7 +39,7 @@ func (uc *RegisterUseCase) Execute(ctx context.Context, in RegisterInput) (auth.
 		return auth.User{}, ErrPasswordTooShort
 	}
 
-	if existing, err := uc.users.FindByEmail(ctx, email); err == nil && existing.ID > 0 {
+	if existing, err := uc.users.FindByEmail(ctx, email); err == nil && existing.ID != "" {
 		return auth.User{}, auth.ErrEmailTaken
 	}
 

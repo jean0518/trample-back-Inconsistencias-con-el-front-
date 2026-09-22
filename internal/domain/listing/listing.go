@@ -10,7 +10,7 @@ var ErrNotFound = errors.New("listing no encontrado")
 
 type Listing struct {
 	ID        int64
-	SellerID  int64
+	SellerID  string
 	VariantID int64
 	OwnerID   int64
 	GameName  string
@@ -39,7 +39,7 @@ type Listing struct {
 }
 
 type CreateInput struct {
-	SellerID  int64
+	SellerID  string
 	VariantID int64
 	OwnerID   int64
 	Quantity  int
@@ -54,7 +54,7 @@ type CreateInput struct {
 // Los listings solo manejan los estados 'active' o 'inactive'.
 type UpdateStockInput struct {
 	ID       int64
-	SellerID int64
+	SellerID string
 	Quantity int
 }
 
@@ -62,7 +62,7 @@ type UpdateStockInput struct {
 // idioma y propietario. price_cop se recalcula con la TRM en el use case.
 type EditInput struct {
 	ID       int64
-	SellerID int64
+	SellerID string
 	Quantity int
 	PriceUSD float64
 	PriceCOP float64

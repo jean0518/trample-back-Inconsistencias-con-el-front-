@@ -17,7 +17,7 @@ const (
 type ReservationLog struct {
 	ID            int64
 	ReservationID int64
-	UserID        int64
+	UserID        string
 	CustomerName  string
 	CustomerEmail string
 	CardID        int64

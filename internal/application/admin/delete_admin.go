@@ -13,6 +13,6 @@ func NewDeleteAdminUseCase(staff out.AdminUserRepository) *DeleteAdminUseCase {
 	return &DeleteAdminUseCase{staff: staff}
 }
 
-func (uc *DeleteAdminUseCase) Execute(ctx context.Context, id int64) error {
+func (uc *DeleteAdminUseCase) Execute(ctx context.Context, id string) error {
 	return uc.staff.Delete(ctx, id)
 }

@@ -7,7 +7,7 @@ import (
 )
 
 type UpdateRoleInput struct {
-	UserID int64
+	UserID string
 	Role   string
 }
 

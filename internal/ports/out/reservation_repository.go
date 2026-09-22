@@ -15,17 +15,17 @@ type ReservationRepository interface {
 	// reservation.ErrInsufficientStock.
 	Reserve(ctx context.Context, input reservation.ReserveInput, durationMinutes int) (reservation.Reservation, error)
 	// ListActiveByUser devuelve las reservas activas del usuario.
-	ListActiveByUser(ctx context.Context, userID int64) ([]reservation.Reservation, error)
+	ListActiveByUser(ctx context.Context, userID string) ([]reservation.Reservation, error)
 	// ListActiveByUserAndIDs devuelve reservas activas de un usuario
 	// filtrando por ids. Se usa al confirmar la venta.
-	ListActiveByUserAndIDs(ctx context.Context, userID int64, ids []int64) ([]reservation.Reservation, error)
+	ListActiveByUserAndIDs(ctx context.Context, userID string, ids []int64) ([]reservation.Reservation, error)
 	// Confirm marca las reservas indicadas del usuario como 'confirmed'.
-	Confirm(ctx context.Context, userID int64, ids []int64) error
+	Confirm(ctx context.Context, userID string, ids []int64) error
 	// Remove libera una reserva activa del usuario (el stock queda disponible
 	// de nuevo para otros clientes; el inventario no se modifica). Devuelve
 	// reservation.ErrNotFound si la reserva no existe, no pertenece al usuario
 	// o no está activa.
-	Remove(ctx context.Context, userID, id int64) error
+	Remove(ctx context.Context, userID string, id int64) error
 	// ReleaseExpired libera todas las reservas 'active' ya vencidas para que
 	// su stock vuelva a estar disponible. Devuelve la cantidad de reservas
 	// liberadas.

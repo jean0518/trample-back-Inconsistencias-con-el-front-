@@ -25,7 +25,7 @@ func NewCartUseCase(repo out.ReservationRepository) *CartUseCase {
 // inventario menos lo reservado por cualquier usuario), de modo que no se
 // pueda exceder la disponibilidad aunque ya figure en el carrito.
 func (uc *CartUseCase) Add(ctx context.Context, input reservation.ReserveInput) (reservation.Reservation, error) {
-	if input.UserID <= 0 || input.CardID <= 0 || input.Quantity <= 0 {
+	if input.UserID == "" || input.CardID <= 0 || input.Quantity <= 0 {
 		return reservation.Reservation{}, reservation.ErrInvalidListing
 	}
 	return uc.repo.Reserve(ctx, input, holdMinutes)
@@ -33,7 +33,7 @@ func (uc *CartUseCase) Add(ctx context.Context, input reservation.ReserveInput) 
 
 // Cart devuelve el contenido actual del carrito (reservas activas) del
 // usuario.
-func (uc *CartUseCase) Cart(ctx context.Context, userID int64) ([]reservation.Reservation, error) {
+func (uc *CartUseCase) Cart(ctx context.Context, userID string) ([]reservation.Reservation, error) {
 	items, err := uc.repo.ListActiveByUser(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -45,7 +45,7 @@ func (uc *CartUseCase) Cart(ctx context.Context, userID int64) ([]reservation.Re
 }
 
 // Remove libera una reserva activa del usuario y restaura el stock.
-func (uc *CartUseCase) Remove(ctx context.Context, userID, id int64) error {
+func (uc *CartUseCase) Remove(ctx context.Context, userID string, id int64) error {
 	return uc.repo.Remove(ctx, userID, id)
 }
 

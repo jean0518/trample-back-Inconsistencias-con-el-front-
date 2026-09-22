@@ -29,7 +29,7 @@ func NewListingHandler(
 
 type listingResponse struct {
 	ID            int64   `json:"ID"`
-	SellerID      int64   `json:"SellerID"`
+	SellerID      string  `json:"SellerID"`
 	SellerName    string  `json:"SellerName"`
 	VariantID     int64   `json:"VariantID"`
 	OwnerID       int64   `json:"OwnerID"`

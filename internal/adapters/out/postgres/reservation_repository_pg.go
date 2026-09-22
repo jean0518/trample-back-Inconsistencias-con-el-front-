@@ -512,7 +512,7 @@ func logReservation(ctx context.Context, tx pgx.Tx, l reservation.ReservationLog
 // primero, con paginación y filtro opcional por estado.
 func (r *ReservationRepository) ListReservationLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error) {
 	q := `
-		SELECT id, reservation_id, user_id, customer_name, customer_email,
+		SELECT id, reservation_id, COALESCE(user_id::text, ''), customer_name, customer_email,
 		       card_id, card_name, variant_name, language, quantity,
 		       price_usd, price_cop, status, created_at
 		FROM cart_reservation_logs

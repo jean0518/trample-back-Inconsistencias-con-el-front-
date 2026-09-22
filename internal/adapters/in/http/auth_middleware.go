@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -17,7 +16,7 @@ const AuthCookieName = "trample_token"
 type ctxKey string
 
 type AuthUser struct {
-	ID          int64
+	ID          string
 	Email       string
 	FirstName   string
 	LastName    string
@@ -82,12 +81,7 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		sub, err := claims.GetSubject()
-		if err != nil {
-			Error(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		id, err := strconv.ParseInt(sub, 10, 64)
-		if err != nil {
+		if err != nil || sub == "" {
 			Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -97,7 +91,7 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			perms = []string{}
 		}
 		ctx := context.WithValue(r.Context(), authCtxKey, AuthUser{
-			ID:          id,
+			ID:          sub,
 			Email:       claims.Email,
 			FirstName:   claims.FirstName,
 			LastName:    claims.LastName,

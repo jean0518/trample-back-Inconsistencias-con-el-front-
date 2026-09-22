@@ -116,7 +116,7 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	return rows.Err()
 }
 
-func (r *SaleRepository) ListByUser(ctx context.Context, userID int64, limit, offset int) ([]sale.Sale, error) {
+func (r *SaleRepository) ListByUser(ctx context.Context, userID string, limit, offset int) ([]sale.Sale, error) {
 	rows, err := r.db.Query(ctx, saleSelect+` WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listar ventas del usuario: %w", err)

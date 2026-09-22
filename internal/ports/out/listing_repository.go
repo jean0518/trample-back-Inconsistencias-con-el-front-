@@ -7,7 +7,7 @@ import (
 
 type ListingRepository interface {
 	Create(ctx context.Context, input listing.CreateInput) (listing.Listing, error)
-	ListBySeller(ctx context.Context, sellerID int64, limit, offset int) ([]listing.Listing, error)
+	ListBySeller(ctx context.Context, sellerID string, limit, offset int) ([]listing.Listing, error)
 	// ListAll devuelve el inventario general de todos los vendedores; se usa
 	// para que los administradores vean el listing completo.
 	ListAll(ctx context.Context, limit, offset int) ([]listing.Listing, error)
@@ -15,11 +15,11 @@ type ListingRepository interface {
 	// FindBySellerAndVariantLanguageOwner devuelve el listing vigente (active o
 	// inactive) del vendedor para una variante con el mismo idioma y propietario,
 	// o listing.ErrNotFound si no existe.
-	FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID, variantID int64, language string, ownerID int64) (listing.Listing, error)
+	FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID string, variantID int64, language string, ownerID int64) (listing.Listing, error)
 	// AddQuantity suma cantidad al listing indicado y lo reactiva si estaba
 	// 'inactive'.
 	AddQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error)
 	// Edit actualiza precio, cantidad, idioma y propietario de un listing.
 	Edit(ctx context.Context, input listing.EditInput) (listing.Listing, error)
-	Delete(ctx context.Context, id, sellerID int64) error
+	Delete(ctx context.Context, id int64, sellerID string) error
 }

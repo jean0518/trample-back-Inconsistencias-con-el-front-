@@ -19,7 +19,7 @@ func NewAdminUserRepository(db *pgxpool.Pool) *AdminUserRepository {
 	return &AdminUserRepository{db: db}
 }
 
-func (r *AdminUserRepository) CreateStaff(ctx context.Context, user auth.User, createdBy int64) (auth.User, error) {
+func (r *AdminUserRepository) CreateStaff(ctx context.Context, user auth.User, createdBy string) (auth.User, error) {
 	if user.Permissions == nil {
 		user.Permissions = []string{}
 	}
@@ -85,7 +85,7 @@ func (r *AdminUserRepository) List(ctx context.Context) ([]auth.User, error) {
 	return users, rows.Err()
 }
 
-func (r *AdminUserRepository) UpdateRole(ctx context.Context, userID int64, role string, permissions []string) error {
+func (r *AdminUserRepository) UpdateRole(ctx context.Context, userID string, role string, permissions []string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -133,7 +133,7 @@ func (r *AdminUserRepository) UpdateRole(ctx context.Context, userID int64, role
 	return tx.Commit(ctx)
 }
 
-func (r *AdminUserRepository) UpdatePanels(ctx context.Context, userID int64, panels []string, role string) error {
+func (r *AdminUserRepository) UpdatePanels(ctx context.Context, userID string, panels []string, role string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -181,7 +181,7 @@ func (r *AdminUserRepository) UpdatePanels(ctx context.Context, userID int64, pa
 	return tx.Commit(ctx)
 }
 
-func (r *AdminUserRepository) UpdateProfile(ctx context.Context, userID int64, user auth.User, role string) error {
+func (r *AdminUserRepository) UpdateProfile(ctx context.Context, userID string, user auth.User, role string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func (r *AdminUserRepository) UpdateProfile(ctx context.Context, userID int64, u
 	return tx.Commit(ctx)
 }
 
-func (r *AdminUserRepository) Delete(ctx context.Context, userID int64) error {
+func (r *AdminUserRepository) Delete(ctx context.Context, userID string) error {
 	tag, err := r.db.Exec(ctx,
 		`DELETE FROM users
 		 WHERE id = $1

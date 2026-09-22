@@ -11,13 +11,13 @@ import (
 )
 
 type AuthHandler struct {
-	register    *appAuth.RegisterUseCase
-	login       *appAuth.LoginUseCase
+	register     *appAuth.RegisterUseCase
+	login        *appAuth.LoginUseCase
 	secureCookie bool
 }
 
 type authUserResponse struct {
-	ID          int64    `json:"id"`
+	ID          string   `json:"id"`
 	FirstName   string   `json:"first_name"`
 	LastName    string   `json:"last_name"`
 	Email       string   `json:"email"`

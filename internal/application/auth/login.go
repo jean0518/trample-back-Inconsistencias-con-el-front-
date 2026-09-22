@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 	"trample-back/internal/domain/auth"
@@ -64,7 +63,7 @@ func (uc *LoginUseCase) IssueToken(_ context.Context, user auth.User) (string, e
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":         strconv.FormatInt(user.ID, 10),
+		"sub":         user.ID,
 		"email":       user.Email,
 		"first_name":  user.FirstName,
 		"last_name":   user.LastName,

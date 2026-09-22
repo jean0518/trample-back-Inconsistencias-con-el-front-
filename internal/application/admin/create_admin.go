@@ -29,7 +29,7 @@ type CreateAdminInput struct {
 	Password    string
 	Role        string
 	Permissions []string
-	CreatedBy   int64
+	CreatedBy   string
 }
 
 type CreateAdminUseCase struct {

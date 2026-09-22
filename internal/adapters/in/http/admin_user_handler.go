@@ -3,7 +3,6 @@ package http
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	appAdmin "trample-back/internal/application/admin"
 	"trample-back/internal/domain/auth"
@@ -32,7 +31,7 @@ func NewAdminUserHandler(
 }
 
 type adminUserResponse struct {
-	ID          int64    `json:"id"`
+	ID          string   `json:"id"`
 	FirstName   string   `json:"first_name"`
 	LastName    string   `json:"last_name"`
 	Email       string   `json:"email"`
@@ -115,8 +114,8 @@ func (h *AdminUserHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminUserHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		Error(w, http.StatusBadRequest, "id inválido")
 		return
 	}
@@ -145,12 +144,12 @@ func (h *AdminUserHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"updated": strconv.FormatInt(id, 10)})
+	JSON(w, http.StatusOK, map[string]string{"updated": id})
 }
 
 func (h *AdminUserHandler) UpdatePermissions(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		Error(w, http.StatusBadRequest, "id inválido")
 		return
 	}
@@ -179,12 +178,12 @@ func (h *AdminUserHandler) UpdatePermissions(w http.ResponseWriter, r *http.Requ
 		}
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"updated": strconv.FormatInt(id, 10)})
+	JSON(w, http.StatusOK, map[string]string{"updated": id})
 }
 
 func (h *AdminUserHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		Error(w, http.StatusBadRequest, "id inválido")
 		return
 	}
@@ -229,12 +228,12 @@ func (h *AdminUserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"updated": strconv.FormatInt(id, 10)})
+	JSON(w, http.StatusOK, map[string]string{"updated": id})
 }
 
 func (h *AdminUserHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		Error(w, http.StatusBadRequest, "id inválido")
 		return
 	}
@@ -247,7 +246,7 @@ func (h *AdminUserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "error interno del servidor")
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"deleted": strconv.FormatInt(id, 10)})
+	JSON(w, http.StatusOK, map[string]string{"deleted": id})
 }
 
 type panelResponse struct {

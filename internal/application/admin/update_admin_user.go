@@ -12,7 +12,7 @@ import (
 )
 
 type UpdateAdminUserInput struct {
-	UserID      int64
+	UserID      string
 	FirstName   string
 	LastName    string
 	Email       string

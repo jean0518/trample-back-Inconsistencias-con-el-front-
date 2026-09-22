@@ -103,10 +103,10 @@ func NewImportListingUseCase(
 
 func (uc *ImportListingUseCase) Execute(
 	ctx context.Context,
-	sellerID int64,
+	sellerID string,
 	groups []ImportListingGroup,
 ) ([]ImportedListing, error) {
-	if sellerID <= 0 {
+	if sellerID == "" {
 		return nil, fmt.Errorf("seller_id inválido")
 	}
 	if len(groups) == 0 {

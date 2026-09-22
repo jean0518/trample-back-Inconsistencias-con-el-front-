@@ -24,7 +24,7 @@ const (
 // ninguna pasarela de pagos externa (p.ej. Bold) todavía.
 type Sale struct {
 	ID            int64
-	UserID        int64
+	UserID        string
 	TotalCOP      int64
 	TotalUSD      float64
 	ShippingCOP   int64
@@ -54,7 +54,7 @@ type SaleItem struct {
 
 // ConfirmInput describe los datos necesarios para registrar una venta local.
 type ConfirmInput struct {
-	UserID        int64
+	UserID        string
 	Fulfillment   string
 	Address       string
 	City          string

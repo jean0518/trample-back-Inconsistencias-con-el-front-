@@ -13,7 +13,7 @@ var ErrInvalidListing = errors.New("no hay listing activo disponible para esa ca
 // cliente cuando agrega una carta a su carrito.
 type Reservation struct {
 	ID          int64
-	UserID      int64
+	UserID      string
 	ListingID   int64
 	CardID      int64
 	CardName    string
@@ -30,7 +30,7 @@ type Reservation struct {
 // un idioma concreto y, opcionalmente, el acabado (Normal, Foil, etc.). Si
 // VariantName viene vacío, se reserva el listing activo con más stock.
 type ReserveInput struct {
-	UserID      int64
+	UserID      string
 	CardID      int64
 	Language    string
 	VariantName string

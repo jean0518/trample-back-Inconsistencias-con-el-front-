@@ -7,7 +7,7 @@ import (
 )
 
 type UpdatePanelsInput struct {
-	UserID int64
+	UserID string
 	Panels []string
 }
 

@@ -13,6 +13,6 @@ func NewDeleteListingUseCase(repo out.ListingRepository) *DeleteListingUseCase {
 	return &DeleteListingUseCase{repo: repo}
 }
 
-func (uc *DeleteListingUseCase) Execute(ctx context.Context, id, sellerID int64) error {
+func (uc *DeleteListingUseCase) Execute(ctx context.Context, id int64, sellerID string) error {
 	return uc.repo.Delete(ctx, id, sellerID)
 }

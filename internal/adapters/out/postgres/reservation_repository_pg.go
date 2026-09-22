@@ -207,7 +207,7 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 	return res, nil
 }
 
-func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID int64) ([]reservation.Reservation, error) {
+func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID string) ([]reservation.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
@@ -245,7 +245,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID int
 	return out, rows.Err()
 }
 
-func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, userID int64, ids []int64) ([]reservation.Reservation, error) {
+func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, userID string, ids []int64) ([]reservation.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
@@ -283,7 +283,7 @@ func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, user
 	return out, rows.Err()
 }
 
-func (r *ReservationRepository) Confirm(ctx context.Context, userID int64, ids []int64) error {
+func (r *ReservationRepository) Confirm(ctx context.Context, userID string, ids []int64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -358,7 +358,7 @@ func (r *ReservationRepository) Confirm(ctx context.Context, userID int64, ids [
 	return tx.Commit(ctx)
 }
 
-func (r *ReservationRepository) Remove(ctx context.Context, userID, id int64) error {
+func (r *ReservationRepository) Remove(ctx context.Context, userID string, id int64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err

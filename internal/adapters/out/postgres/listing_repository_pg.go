@@ -86,7 +86,7 @@ func (r *ListingRepository) Create(ctx context.Context, input listing.CreateInpu
 	return l, nil
 }
 
-func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID int64, limit, offset int) ([]listing.Listing, error) {
+func (r *ListingRepository) ListBySeller(ctx context.Context, sellerID string, limit, offset int) ([]listing.Listing, error) {
 	rows, err := r.db.Query(ctx, `
 		`+inventoryListingSelect+`
 		WHERE il.seller_id = $1
@@ -150,7 +150,7 @@ func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.Up
 // FindBySellerAndVariantLanguageOwner devuelve el listing vigente (active o
 // inactive) del vendedor para una variante con el mismo idioma y propietario.
 // Se usa al importar para decidir si sumar stock o crear un listing nuevo.
-func (r *ListingRepository) FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID, variantID int64, language string, ownerID int64) (listing.Listing, error) {
+func (r *ListingRepository) FindBySellerAndVariantLanguageOwner(ctx context.Context, sellerID string, variantID int64, language string, ownerID int64) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
 		SELECT id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at
@@ -233,7 +233,7 @@ func (r *ListingRepository) Edit(ctx context.Context, input listing.EditInput) (
 	return l, nil
 }
 
-func (r *ListingRepository) Delete(ctx context.Context, id, sellerID int64) error {
+func (r *ListingRepository) Delete(ctx context.Context, id int64, sellerID string) error {
 	tag, err := r.db.Exec(ctx, `
 		DELETE FROM inventory_listings WHERE id = $1 AND seller_id = $2
 	`, id, sellerID)

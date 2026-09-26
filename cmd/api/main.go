@@ -72,7 +72,8 @@ func main() {
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
 	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, ownerRepo, trmClient)
 	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)
-	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo, priceRefresherUC)
+	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, log)
+	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
@@ -107,6 +108,7 @@ func main() {
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
+		Webhook:        httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
 		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, updatePanelsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
@@ -159,7 +161,7 @@ func main() {
 // Scrydex y las actualiza en lotes hasta agotar el backlog.
 func runPriceRefreshJob(ctx context.Context, refresher *appCatalog.PriceRefresher, log *slog.Logger) {
 	const (
-		tick      = 6 * time.Hour
+		tick      = 24 * time.Hour
 		batchSize = 50
 	)
 

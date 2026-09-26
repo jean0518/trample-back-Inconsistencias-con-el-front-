@@ -134,7 +134,18 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 			if variant.NMPrice.MarketUSD > 0 {
 				if _, err := tx.Exec(ctx, `
 					UPDATE inventory_listings
-					SET price_usd = $2, price_cop = $3, updated_at = now()
+					SET
+						price_usd = CASE
+							WHEN language IN ('Spanish', 'Español')
+							THEN ROUND(($2 * 0.80)::numeric, 2)
+							ELSE $2
+						END,
+						price_cop = CASE
+							WHEN language IN ('Spanish', 'Español')
+							THEN ROUND(($3 * 0.80)::numeric, 0)
+							ELSE $3
+						END,
+						updated_at = now()
 					WHERE variant_id = $1
 				`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
 					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)

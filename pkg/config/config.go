@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	ScrydexAPIKey  string
-	ScrydexTeamID  string
-	JWTSecret      string
-	AllowedOrigins []string
-	Env            string
+	Port                  string
+	DatabaseURL           string
+	ScrydexAPIKey         string
+	ScrydexTeamID         string
+	ScrydexWebhookSecret  string
+	JWTSecret             string
+	AllowedOrigins        []string
+	Env                   string
 }
 
 func Load() (*Config, error) {
@@ -45,13 +46,14 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Port:           envOr("PORT", "8080"),
-		DatabaseURL:    dbURL,
-		ScrydexAPIKey:  scrydexKey,
-		ScrydexTeamID:  scrydexTeam,
-		JWTSecret:      jwtSecret,
-		AllowedOrigins: origins,
-		Env:            envOr("ENV", "development"),
+		Port:                 envOr("PORT", "8080"),
+		DatabaseURL:          dbURL,
+		ScrydexAPIKey:        scrydexKey,
+		ScrydexTeamID:        scrydexTeam,
+		ScrydexWebhookSecret: envOr("SCRYDEX_WEBHOOK_SECRET", ""),
+		JWTSecret:            jwtSecret,
+		AllowedOrigins:       origins,
+		Env:                  envOr("ENV", "development"),
 	}, nil
 }
 

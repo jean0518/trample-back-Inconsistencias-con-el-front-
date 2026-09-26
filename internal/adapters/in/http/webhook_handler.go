@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -54,10 +55,9 @@ func (h *WebhookHandler) HandleScrydex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
-		if err := h.processWebhook.Execute(r.Context(), event); err != nil {
-			// El error ya quedó loggeado en el use case; aquí solo evitamos
-			// que la goroutine muera silenciosamente si lo necesitáramos.
+		if err := h.processWebhook.Execute(bgCtx, event); err != nil {
 			_ = err
 		}
 	}()

@@ -20,6 +20,10 @@ func Decode(r *http.Request, dst any) error {
 	return json.NewDecoder(r.Body).Decode(dst)
 }
 
+func DecodeBytes(data []byte, dst any) error {
+	return json.Unmarshal(data, dst)
+}
+
 // friendlyErr convierte errores internos en mensajes legibles para el usuario.
 // Detecta el origen (Scrydex, TRM, búsqueda expirada) y devuelve un texto
 // claro; cualquier otro error pasa tal cual para no perder contexto útil.

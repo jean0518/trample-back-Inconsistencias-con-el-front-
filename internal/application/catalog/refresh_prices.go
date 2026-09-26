@@ -14,7 +14,7 @@ import (
 
 // PriceStaleAfter es cuánto puede pasar sin que una carta consulte su precio
 // en Scrydex antes de considerarse desactualizada.
-const PriceStaleAfter = 7 * 24 * time.Hour
+const PriceStaleAfter = 30 * 24 * time.Hour
 
 // refreshCard vuelve a consultar una carta en Scrydex (con TRM aplicado) y
 // persiste el resultado, incluyendo el precio actualizado.

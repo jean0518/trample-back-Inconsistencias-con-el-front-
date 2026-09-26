@@ -22,6 +22,7 @@ type Handlers struct {
 	Cart           *CartHandler
 	Sales          *SaleHandler
 	AdminUsers     *AdminUserHandler
+	Webhook        *WebhookHandler
 	AuthMiddleware *AuthMiddleware
 	AllowedOrigins []string
 }
@@ -73,6 +74,9 @@ func NewRouter(h Handlers) http.Handler {
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	// Webhooks externos — sin auth JWT, la firma HMAC actúa como control de acceso
+	r.Post("/webhooks/scrydex", h.Webhook.HandleScrydex)
 
 	r.Get("/games", h.Games.List)
 	r.Get("/expansions", h.Games.ListExpansions)

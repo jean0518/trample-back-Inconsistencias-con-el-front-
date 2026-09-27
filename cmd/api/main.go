@@ -21,6 +21,7 @@ import (
 	httpadapter "trample-back/internal/adapters/in/http"
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
+	"trample-back/internal/adapters/out/supabase"
 	"trample-back/internal/adapters/out/trm"
 	appAdmin "trample-back/internal/application/admin"
 	appAuth "trample-back/internal/application/auth"
@@ -76,7 +77,11 @@ func main() {
 	// Alta de inventario desde el panel: el alta manual de cartas y el botón "+"
 	// que crea una expansión sin pasar por Scrydex.
 	manualCardRepo := postgres.NewManualCardRepositoryPG(pool)
-	cardImageRepo := postgres.NewCardImageRepositoryPG(pool)
+	// Las imágenes van a Supabase Storage si hay bucket configurado; si falta
+	// alguna variable, storage queda nil y los frontales se guardan en la base
+	// como hasta ahora, para que el arranque no dependa del bucket.
+	imageStorage := supabase.NewStorage(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey, cfg.SupabaseStorageBucket)
+	cardImageRepo := postgres.NewCardImageRepositoryPG(pool, imageStorage)
 	manualListingUC := appCatalog.NewManualListingUseCase(manualCardRepo, listingRepo, ownerRepo, cardImageRepo, trmClient)
 	newExpansionUC := appCatalog.NewNewExpansionUseCase(expansionRepo)
 	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)

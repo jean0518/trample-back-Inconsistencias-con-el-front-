@@ -9,17 +9,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"trample-back/internal/domain/catalog"
+	"trample-back/internal/ports/out"
 )
 
-// CardImageRepositoryPG guarda los frontales subidos como archivo en la tabla
-// card_image_blobs y mantiene card_images apuntando al endpoint que los sirve.
+// CardImageRepositoryPG guarda los frontales subidos como archivo y mantiene
+// card_images apuntando a la dirección donde se sirven.
+//
+// Los bytes van a Supabase Storage cuando hay bucket configurado, y a la tabla
+// card_image_blobs cuando no. El respaldo existe porque los dos caminos
+// conviven: las imágenes ya subidas siguen en la base y se sirven por
+// /card-images/{id}, así que quitar el bucket no puede dejarlas huérfanas.
 type CardImageRepositoryPG struct {
-	db *pgxpool.Pool
+	db      *pgxpool.Pool
+	storage out.ImageStorage
 }
 
 // NewCardImageRepositoryPG construye el repositorio sobre el pool de pgx.
-func NewCardImageRepositoryPG(db *pgxpool.Pool) *CardImageRepositoryPG {
-	return &CardImageRepositoryPG{db: db}
+// storage puede ser nil, y en ese caso los frontales se guardan en la base.
+func NewCardImageRepositoryPG(db *pgxpool.Pool, storage out.ImageStorage) *CardImageRepositoryPG {
+	return &CardImageRepositoryPG{db: db, storage: storage}
 }
 
 // upsertImage es el enlace hacia el catálogo que comparten Store y Link: la
@@ -44,9 +52,24 @@ const upsertImage = `
 // haría que NULL colisionara consigo mismo y el ON CONFLICT nunca encontraría
 // la fila previa, de modo que cada re-subida insertaría una duplicada en vez de
 // reemplazar el frontal.
-func (r *CardImageRepositoryPG) Store(ctx context.Context, cardID int64, upload catalog.ImageUpload) (int64, error) {
+func (r *CardImageRepositoryPG) Store(ctx context.Context, cardID int64, upload catalog.ImageUpload) (string, error) {
 	if upload.IsEmpty() {
-		return 0, fmt.Errorf("la imagen está vacía")
+		return "", fmt.Errorf("la imagen está vacía")
+	}
+
+	// Camino preferido: el bucket. La subida va primero porque no se puede
+	// deshacer: si el UPDATE de card_images fallara con el archivo ya subido,
+	// lo que queda es un objeto huérfano en el bucket, que es inocuo, mientras
+	// que al revés la carta apuntaría a una imagen que no existe.
+	if r.storage != nil {
+		publicURL, err := r.storage.Put(ctx, cardID, upload)
+		if err != nil {
+			return "", err
+		}
+		if _, err := r.db.Exec(ctx, upsertImage, cardID, publicURL); err != nil {
+			return "", fmt.Errorf("no se pudo enlazar la imagen con la carta: %w", err)
+		}
+		return publicURL, nil
 	}
 
 	var imageID int64
@@ -65,9 +88,9 @@ func (r *CardImageRepositoryPG) Store(ctx context.Context, cardID int64, upload 
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	return imageID, nil
+	return fmt.Sprintf("/card-images/%d", imageID), nil
 }
 
 // Link apunta el frontal de la carta a una URL externa. No copia los bytes: la

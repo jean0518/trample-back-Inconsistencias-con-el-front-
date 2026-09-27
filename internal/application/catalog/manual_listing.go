@@ -225,11 +225,11 @@ func (uc *ManualListingUseCase) Execute(ctx context.Context, sellerID string, in
 	// una imagen que el catálogo nunca llegaría a mostrar.
 	switch {
 	case !imageSource.Upload.IsEmpty():
-		imageID, err := uc.images.Store(ctx, cardResult.CardID, imageSource.Upload)
+		imageURL, err := uc.images.Store(ctx, cardResult.CardID, imageSource.Upload)
 		if err != nil {
 			return ManualListingResult{}, fmt.Errorf("%w: %v", ErrImageAttachment, err)
 		}
-		result.ImageURL = fmt.Sprintf("/card-images/%d", imageID)
+		result.ImageURL = imageURL
 	case imageSource.URL != "":
 		if err := uc.images.Link(ctx, cardResult.CardID, imageSource.URL); err != nil {
 			return ManualListingResult{}, fmt.Errorf("%w: %v", ErrImageAttachment, err)

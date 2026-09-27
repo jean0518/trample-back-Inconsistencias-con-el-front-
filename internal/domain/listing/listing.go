@@ -14,6 +14,10 @@ type Listing struct {
 	VariantID int64
 	OwnerID   int64
 	GameName  string
+	// GameCode es el identificador estable del juego ('riftbound', 'pokemon').
+	// El front lo necesita para decidir qué idiomas admite cada juego; con
+	// GameName no alcanza, porque ese texto puede venir con acentos o traducirse.
+	GameCode string
 	// Datos de la carta para el inventario legible (JOIN con cards/expansions).
 	CardID int64
 	// ExternalID y CardNumber identifican la versión concreta de la carta

@@ -9,14 +9,17 @@ import (
 )
 
 type Config struct {
-	Port                  string
-	DatabaseURL           string
-	ScrydexAPIKey         string
-	ScrydexTeamID         string
-	ScrydexWebhookSecret  string
-	JWTSecret             string
-	AllowedOrigins        []string
-	Env                   string
+	Port                   string
+	DatabaseURL            string
+	ScrydexAPIKey          string
+	ScrydexTeamID          string
+	ScrydexWebhookSecret   string
+	JWTSecret              string
+	AllowedOrigins         []string
+	Env                    string
+	SupabaseURL            string
+	SupabaseServiceRoleKey string
+	SupabaseStorageBucket  string
 }
 
 func Load() (*Config, error) {
@@ -54,6 +57,11 @@ func Load() (*Config, error) {
 		JWTSecret:            jwtSecret,
 		AllowedOrigins:       origins,
 		Env:                  envOr("ENV", "development"),
+		// Opcionales a propósito: sin ellas el catálogo sigue funcionando y
+		// los frontales se guardan en la base en vez de en el bucket.
+		SupabaseURL:            envOr("SUPABASE_URL", ""),
+		SupabaseServiceRoleKey: envOr("SUPABASE_SERVICE_ROLE_KEY", ""),
+		SupabaseStorageBucket:  envOr("SUPABASE_STORAGE_BUCKET", ""),
 	}, nil
 }
 

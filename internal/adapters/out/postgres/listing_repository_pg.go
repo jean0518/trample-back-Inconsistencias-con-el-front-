@@ -25,6 +25,7 @@ const inventoryListingSelect = `
 	SELECT
 		il.id, il.seller_id, il.variant_id, il.owner_id,
 		g.name AS game_name,
+		g.code AS game_code,
 		c.id AS card_id, c.external_id AS card_external_id, c.number AS card_number,
 		c.name AS card_name,
 		COALESCE(
@@ -53,7 +54,7 @@ func scanListingRows(rows pgx.Rows) ([]listing.Listing, error) {
 		var l listing.Listing
 		if err := rows.Scan(
 &l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
-		&l.GameName,
+		&l.GameName, &l.GameCode,
 		&l.CardID, &l.ExternalID, &l.CardNumber,
 			&l.CardName, &l.CardImage, &l.ExpansionName, &l.VariantName,
 			&l.OwnerName, &l.SellerName,

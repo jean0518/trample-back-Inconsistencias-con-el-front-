@@ -24,10 +24,13 @@ func (uc *EditListingUseCase) Execute(ctx context.Context, input listing.EditInp
 	if input.PriceUSD <= 0 {
 		return listing.Listing{}, fmt.Errorf("price_usd debe ser mayor a 0")
 	}
+	// La lista de idiomas aceptados vive acá y no solo en el front a
+	// propósito: si únicamente el formulario la tuviera, un cliente podría
+	// saltársela y metería cualquier texto en listings.language.
 	switch input.Language {
-	case "Inglés", "Español", "Japonés":
+	case "Inglés", "Español", "Japonés", "Chino":
 	default:
-		return listing.Listing{}, fmt.Errorf("language inválido: debe ser Inglés, Español o Japonés")
+		return listing.Listing{}, fmt.Errorf("language inválido: debe ser Inglés, Español, Japonés o Chino")
 	}
 	if input.OwnerID <= 0 {
 		return listing.Listing{}, fmt.Errorf("owner_id es requerido")

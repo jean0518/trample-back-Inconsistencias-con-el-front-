@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -44,10 +45,13 @@ type fakeImageRepo struct {
 	lastLinkedURL string
 }
 
-func (f *fakeImageRepo) Store(_ context.Context, cardID int64, _ catalog.ImageUpload) (int64, error) {
+func (f *fakeImageRepo) Store(_ context.Context, cardID int64, _ catalog.ImageUpload) (string, error) {
 	f.storeCalls++
 	f.lastCard = cardID
-	return f.storedImageID, f.err
+	if f.err != nil {
+		return "", f.err
+	}
+	return fmt.Sprintf("/card-images/%d", f.storedImageID), nil
 }
 
 func (f *fakeImageRepo) Link(_ context.Context, cardID int64, externalURL string) error {

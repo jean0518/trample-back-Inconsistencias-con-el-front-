@@ -29,9 +29,9 @@ func refreshCard(ctx context.Context, search *SearchScrydex, repo out.CardReposi
 	return card, nil
 }
 
-// PriceRefresher mantiene los precios de Scrydex al día: refresca cartas
-// desactualizadas tanto de forma perezosa (disparada al listar el catálogo)
-// como en lotes (job periódico de respaldo para cartas que nadie consulta).
+// PriceRefresher mantiene los precios de Scrydex al día refrescando en lotes
+// las cartas cuyo precio quedó viejo, agrupadas por expansión para no gastar
+// una llamada a Scrydex por carta. Lo dispara el job periódico de respaldo.
 type PriceRefresher struct {
 	search *SearchScrydex
 	repo   out.CardRepository
@@ -39,7 +39,6 @@ type PriceRefresher struct {
 
 	mu       sync.Mutex
 	inFlight map[int64]bool
-	lastLazy time.Time
 }
 
 func NewPriceRefresher(search *SearchScrydex, repo out.CardRepository, log *slog.Logger) *PriceRefresher {
@@ -47,33 +46,6 @@ func NewPriceRefresher(search *SearchScrydex, repo out.CardRepository, log *slog
 		log = slog.Default()
 	}
 	return &PriceRefresher{search: search, repo: repo, log: log, inFlight: make(map[int64]bool)}
-}
-
-// TriggerLazy dispara en segundo plano (sin bloquear al llamador) el
-// refresco de un pequeño lote de las cartas más desactualizadas. Pensado
-// para llamarse cada vez que se consulta el catálogo público, con un
-// cooldown para no saturar Scrydex si hay muchos requests seguidos.
-func (r *PriceRefresher) TriggerLazy(ctx context.Context) {
-	const (
-		cooldown  = 1 * time.Minute
-		lazyBatch = 3
-	)
-
-	r.mu.Lock()
-	if time.Since(r.lastLazy) < cooldown {
-		r.mu.Unlock()
-		return
-	}
-	r.lastLazy = time.Now()
-	r.mu.Unlock()
-
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		if _, err := r.RefreshStaleBatch(bgCtx, PriceStaleAfter, lazyBatch); err != nil {
-			r.log.Warn("refresco perezoso de precios falló", slog.Any("error", err))
-		}
-	}()
 }
 
 // expansionKey identifica una expansión de forma única para agrupar.

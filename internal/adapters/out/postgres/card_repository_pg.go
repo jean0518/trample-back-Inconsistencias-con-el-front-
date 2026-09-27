@@ -3,11 +3,13 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/ports/out"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -161,18 +163,127 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 	return tx.Commit(ctx)
 }
 
+// RefreshCardPrices actualiza solo el precio de las variantes que YA existen de
+// una carta. No inserta cartas, expansiones, variantes ni imágenes: si la carta
+// no está en la base la ignora, que es el caso normal cuando el webhook de
+// Scrydex reporta una expansión que el staff todavía no ha dado de alta.
+//
+// Esto sustituye al SyncCard que usaba el webhook, que al ser un UPSERT
+// sincronizaba la expansión entera y llenaba `cards` con miles de cartas sin
+// listing.
+func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string, card catalog.Card) (bool, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var cardID int64
+	err = tx.QueryRow(ctx, `
+		SELECT c.id
+		FROM cards c
+		JOIN games g ON g.id = c.game_id
+		WHERE g.code = $1 AND c.external_id = $2
+	`, gameCode, card.ExternalID).Scan(&cardID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// La carta no está dada de alta: no se crea nada.
+			return false, nil
+		}
+		return false, fmt.Errorf("buscar carta %q: %w", card.ExternalID, err)
+	}
+
+	updated := false
+	for _, variant := range card.Variants {
+		var variantID int64
+		err = tx.QueryRow(ctx, `
+			SELECT id FROM card_variants WHERE card_id = $1 AND variant_name = $2
+		`, cardID, variant.Name).Scan(&variantID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Variante que no tenemos dada de alta: se ignora.
+				continue
+			}
+			return false, fmt.Errorf("buscar variante %q: %w", variant.Name, err)
+		}
+
+		if variant.NMPrice == nil {
+			continue
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO variant_prices (variant_id, condition, price_usd, price_cop, trm_used)
+			VALUES ($1, 'near_mint', $2, $3, $4)
+			ON CONFLICT (variant_id, condition) DO UPDATE SET
+				price_usd  = EXCLUDED.price_usd,
+				price_cop  = EXCLUDED.price_cop,
+				trm_used   = EXCLUDED.trm_used,
+				fetched_at = now()
+		`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP, variant.NMPrice.TRMUsed); err != nil {
+			return false, fmt.Errorf("upsert precio variante %q: %w", variant.Name, err)
+		}
+
+		// Re-preciar los listings de la variante al precio de mercado recién
+		// actualizado, igual que hace SyncCard, para que dos copias de la misma
+		// carta no queden con precios distintos.
+		if variant.NMPrice.MarketUSD > 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE inventory_listings
+				SET
+					price_usd = CASE
+						WHEN language IN ('Spanish', 'Español')
+						THEN ROUND(($2 * 0.80)::numeric, 2)
+						ELSE $2
+					END,
+					price_cop = CASE
+						WHEN language IN ('Spanish', 'Español')
+						THEN ROUND(($3 * 0.80)::numeric, 0)
+						ELSE $3
+					END,
+					updated_at = now()
+				WHERE variant_id = $1
+			`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+				return false, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
+			}
+		}
+
+		if _, err := tx.Exec(ctx, `UPDATE card_variants SET last_price_check_at = now() WHERE id = $1`, variantID); err != nil {
+			return false, fmt.Errorf("actualizar last_price_check_at: %w", err)
+		}
+		updated = true
+	}
+
+	if !updated {
+		return false, nil
+	}
+	return true, tx.Commit(ctx)
+}
+
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
 	offset := (p.Page - 1) * p.PageSize
 
-	// display_price: menor precio NM con valor positivo en COP entre las
-	// variantes de la carta. Se usa para el filtro max_price y el orden.
-	displayPrice := `
+	// display_price: precio que se muestra y por el que se ordena y filtra el
+	// catálogo. Es el menor precio NM de mercado entre las variantes de la
+	// carta; si la carta no tiene precio de mercado —porque se dio de alta a
+	// mano y su external_id no existe en Scrydex— se cae al menor precio del
+	// listing activo, que es lo que el cliente realmente paga. Antes esas
+	// cartas salían con precio 0, o sea sin precio.
+	listingPrice := `
 			COALESCE((
-				SELECT MIN(vp_p.price_cop)
-				FROM card_variants cv_p
-				JOIN variant_prices vp_p ON vp_p.variant_id = cv_p.id AND vp_p.condition = 'near_mint'
-				WHERE cv_p.card_id = c.id AND vp_p.price_cop > 0
+				SELECT MIN(il_p.price_cop)
+				FROM card_variants cv_l
+				JOIN inventory_listings il_p ON il_p.variant_id = cv_l.id
+				WHERE cv_l.card_id = c.id
+				  AND il_p.status = 'active' AND il_p.quantity > 0 AND il_p.price_cop > 0
 			), 0)::bigint`
+
+	displayPrice := `
+		COALESCE((
+			SELECT MIN(vp_p.price_cop)
+			FROM card_variants cv_p
+			JOIN variant_prices vp_p ON vp_p.variant_id = cv_p.id AND vp_p.condition = 'near_mint'
+			WHERE cv_p.card_id = c.id AND vp_p.price_cop > 0
+		), ` + listingPrice + `, 0)::bigint`
 
 	orderBy := "e.release_date DESC, c.id"
 	switch p.Sort {
@@ -216,10 +327,26 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			COALESCE(
 				(SELECT json_agg(vb ORDER BY vb.name)
 				FROM (
-					SELECT
-						cv.variant_name AS name,
-						COALESCE(vp.price_usd, 0) AS price_usd,
-						COALESCE(vp.price_cop, 0) AS price_cop,
+				SELECT
+					cv.variant_name AS name,
+					-- Precio de mercado si existe; si no, el del listing activo
+					-- más barato de la variante. NULLIF trata el 0 como "sin
+					-- precio de mercado" para que caiga al respaldo.
+					COALESCE(NULLIF(vp.price_usd, 0), (
+						SELECT MIN(ilp.price_usd)
+						FROM inventory_listings ilp
+						WHERE ilp.variant_id = cv.id
+						  AND ilp.status = 'active' AND ilp.quantity > 0 AND ilp.price_usd > 0
+					), 0) AS price_usd,
+					COALESCE(NULLIF(vp.price_cop, 0), (
+						-- ::bigint es necesario: inventory_listings.price_cop es
+						-- numeric y MIN devuelve 8000.00, que no entra en el
+						-- int64 de VariantBrief.price_cop al deserializar el JSON.
+						SELECT MIN(ilp.price_cop)::bigint
+						FROM inventory_listings ilp
+						WHERE ilp.variant_id = cv.id
+						  AND ilp.status = 'active' AND ilp.quantity > 0 AND ilp.price_cop > 0
+					), 0) AS price_cop,
 						COALESCE((
 							SELECT json_agg(ls ORDER BY ls.stock DESC)
 							FROM (

@@ -19,6 +19,10 @@ func (f *fakeCardRepoVariant) GetVariantID(_ context.Context, _, _, _ string) (i
 	return f.variantID, nil
 }
 
+// sellerUUID representa el id de users.id, que es un UUID y por eso viaja como
+// string por el dominio en lugar de un entero.
+const sellerUUID = "3f1b7c2e-5a49-4d8b-9c6f-1e2a3b4c5d6e"
+
 type fakeListingRepo struct {
 	out.ListingRepository
 	inputs   []listing.CreateInput
@@ -41,7 +45,7 @@ func (f *fakeListingRepo) Create(_ context.Context, input listing.CreateInput) (
 	}, nil
 }
 
-func (f *fakeListingRepo) FindBySellerAndVariantLanguageOwner(_ context.Context, _, variantID int64, language string, ownerID int64) (listing.Listing, error) {
+func (f *fakeListingRepo) FindBySellerAndVariantLanguageOwner(_ context.Context, _ string, variantID int64, language string, ownerID int64) (listing.Listing, error) {
 	if l, ok := f.existing[variantID]; ok && l.Language == language && l.OwnerID == ownerID {
 		return l, nil
 	}
@@ -50,7 +54,15 @@ func (f *fakeListingRepo) FindBySellerAndVariantLanguageOwner(_ context.Context,
 
 func (f *fakeListingRepo) AddQuantity(_ context.Context, input listing.UpdateStockInput) (listing.Listing, error) {
 	f.added = append(f.added, input)
-	prev := f.existing[0]
+	// Se busca el listing por su ID, como hace el repositorio real, en vez de
+	// asumir una posición concreta en el mapa.
+	var prev listing.Listing
+	for _, l := range f.existing {
+		if l.ID == input.ID {
+			prev = l
+			break
+		}
+	}
 	return listing.Listing{
 		ID:       input.ID,
 		SellerID: input.SellerID,
@@ -107,7 +119,7 @@ func TestImportListingCreaListingsConDefaults(t *testing.T) {
 		}},
 	}, 4000)
 
-	result, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	result, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{
 			{ExternalID: "sv3-180", Quantity: 5},
 			{ExternalID: "sv3-181", Quantity: 2, Language: "Español"},
@@ -120,7 +132,7 @@ func TestImportListingCreaListingsConDefaults(t *testing.T) {
 		t.Fatalf("esperaba 2 listings, hay %d", len(result))
 	}
 	first := listings.inputs[0]
-	if first.SellerID != 7 || first.Quantity != 5 || first.Language != "Inglés" {
+	if first.SellerID != sellerUUID || first.Quantity != 5 || first.Language != "Inglés" {
 		t.Fatalf("defaults incorrectos en listing 1: %+v", first)
 	}
 	if first.OwnerID != 1 {
@@ -151,7 +163,7 @@ func TestImportListingPrecioManualTienePrioridad(t *testing.T) {
 	}, 4000)
 
 	manual := 9.99
-	_, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	_, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "sv3-180", Quantity: 1, PriceUSD: &manual}}},
 	})
 	if err != nil {
@@ -169,7 +181,7 @@ func TestImportListingSinPrecioDisponibleFalla(t *testing.T) {
 		}},
 	}, 4000)
 
-	if _, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	if _, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "sv3-180", Quantity: 1}}},
 	}); err == nil {
 		t.Fatal("esperaba error cuando no hay precio de mercado ni price_usd")
@@ -183,7 +195,7 @@ func TestImportListingDuplicadosSeOmiten(t *testing.T) {
 		"s2": {GameCode: "pokemon", Cards: []catalog.Card{cardWithVariants("dup-1", "Normal", 2.00)}},
 	}, 4000)
 
-	result, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	result, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "dup-1", Quantity: 1}}},
 		{SearchID: "s2", Items: []ListingItem{{ExternalID: "dup-1", Quantity: 3}}},
 	})
@@ -205,11 +217,11 @@ func TestImportListingSumaStockSiYaExiste(t *testing.T) {
 		}},
 	}, 4000)
 	listings.existing[42] = listing.Listing{
-		ID: 99, SellerID: 7, VariantID: 42, OwnerID: 1,
+		ID: 99, SellerID: sellerUUID, VariantID: 42, OwnerID: 1,
 		Quantity: 4, PriceUSD: 0.25, PriceCOP: 1000, Status: "active", Language: "Inglés",
 	}
 
-	result, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	result, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "diana", Quantity: 3}}},
 	})
 	if err != nil {
@@ -233,20 +245,20 @@ func TestImportListingValidaciones(t *testing.T) {
 		}},
 	}, 4000)
 
-	if _, err := uc.Execute(context.Background(), 7, nil); err == nil {
+	if _, err := uc.Execute(context.Background(), sellerUUID, nil); err == nil {
 		t.Fatal("esperaba error sin grupos")
 	}
-	if _, err := uc.Execute(context.Background(), 0, []ImportListingGroup{
+	if _, err := uc.Execute(context.Background(), "", []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "sv3-180", Quantity: 1}}},
 	}); err == nil {
 		t.Fatal("esperaba error con seller_id inválido")
 	}
-	if _, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	if _, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "sv3-180", Quantity: 0}}},
 	}); err == nil {
 		t.Fatal("esperaba error con cantidad 0")
 	}
-	if _, err := uc.Execute(context.Background(), 7, []ImportListingGroup{
+	if _, err := uc.Execute(context.Background(), sellerUUID, []ImportListingGroup{
 		{SearchID: "s1", Items: []ListingItem{{ExternalID: "no-existe", Quantity: 1}}},
 	}); err == nil {
 		t.Fatal("esperaba error con carta ajena a la búsqueda")

@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"trample-back/internal/domain/catalog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -102,4 +104,49 @@ func scanExpansions(rows expansionRow) ([]catalog.Expansion, error) {
 		result = append(result, e)
 	}
 	return result, rows.Err()
+}
+
+// CreateManual registra una expansión que el staff crea desde el panel, sin que
+// exista en Scrydex. Devuelve la expansión persistida y un booleano que indica
+// si realmente se insertó: si el external_id derivado del nombre ya estaba, se
+// devuelve la fila existente con created=false, que es lo que permite que el
+// botón "+" del formulario se pueda pulsar dos veces sin duplicar el set.
+//
+// Cuando la expansión ya existe no se sobreescriben sus datos: puede haberse
+// sincronizado desde Scrydex con información más completa, y pisar eso con lo
+// que se escribió a mano sería una regresión.
+func (r *ExpansionRepository) CreateManual(ctx context.Context, gameCode string, e catalog.Expansion) (catalog.Expansion, bool, error) {
+	var gameID int64
+	if err := r.db.QueryRow(ctx, `SELECT id FROM games WHERE code = $1`, gameCode).Scan(&gameID); err != nil {
+		return catalog.Expansion{}, false, fmt.Errorf("juego %q no encontrado en DB: %w", gameCode, err)
+	}
+
+	// Si ya existe, se devuelve tal cual sin tocar sus campos.
+	var existing catalog.Expansion
+	const find = `
+		SELECT id, game_id, external_id, name, code, series, total, release_date, logo_url, symbol_url
+		FROM expansions WHERE game_id = $1 AND external_id = $2`
+	err := r.db.QueryRow(ctx, find, gameID, e.ExternalID).Scan(
+		&existing.ID, &existing.GameID, &existing.ExternalID, &existing.Name,
+		&existing.Code, &existing.Series, &existing.Total, &existing.ReleaseDate,
+		&existing.Logo, &existing.Symbol)
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return catalog.Expansion{}, false, fmt.Errorf("no se pudo consultar la expansión: %w", err)
+	}
+
+	const insert = `
+		INSERT INTO expansions (game_id, external_id, name, code, series, total, release_date, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		RETURNING id`
+	var id int64
+	if err := r.db.QueryRow(ctx, insert, gameID, e.ExternalID, e.Name, e.Code, e.Series, e.Total, e.ReleaseDate).Scan(&id); err != nil {
+		return catalog.Expansion{}, false, fmt.Errorf("no se pudo crear la expansión: %w", err)
+	}
+
+	e.ID = id
+	e.GameID = gameID
+	return e, true, nil
 }

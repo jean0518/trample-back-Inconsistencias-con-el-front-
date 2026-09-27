@@ -32,7 +32,7 @@ func TestBuildQueryName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildQuery("pokemon", tt.input, "", "", "", "")
+			got := buildQuery("pokemon", tt.input, "", "", "", "", "")
 			want := strings.TrimSpace(tt.nameClause + " " + pocketExclusion)
 			if got != want {
 				t.Fatalf("got %q, want %q", got, want)
@@ -42,7 +42,7 @@ func TestBuildQueryName(t *testing.T) {
 }
 
 func TestBuildQueryMantieneOtrosFiltros(t *testing.T) {
-	got := buildQuery("pokemon", "Team Rocket's Factory", "me2pt5", "Rare", "", "Trainer")
+	got := buildQuery("pokemon", "Team Rocket's Factory", "me2pt5", "Rare", "", "Trainer", "")
 	for _, want := range []string{
 		`name:"Team Rocket's Factory"`,
 		"expansion.id:me2pt5",
@@ -57,8 +57,8 @@ func TestBuildQueryMantieneOtrosFiltros(t *testing.T) {
 }
 
 func TestFallbackSinSimbolosDifiereDelPrimario(t *testing.T) {
-	primary := buildQuery("pokemon", "pikachu.", "", "", "", "")
-	fallback := buildQuery("pokemon", stripNameSymbols("pikachu."), "", "", "", "")
+	primary := buildQuery("pokemon", "pikachu.", "", "", "", "", "")
+	fallback := buildQuery("pokemon", stripNameSymbols("pikachu."), "", "", "", "", "")
 
 	wantPrimary := "name:pikachu.* " + pocketExclusion
 	if primary != wantPrimary {
@@ -87,14 +87,14 @@ func TestStripNameSymbolsReduceALetrasYDigitos(t *testing.T) {
 }
 
 func TestBuildQueryMTGUsaTypes(t *testing.T) {
-	got := buildQuery("mtg", "", "", "", "Instant", "Creature")
+	got := buildQuery("mtg", "", "", "", "Instant", "Creature", "")
 	if !strings.Contains(got, "types:Instant") || strings.Contains(got, "supertype:") {
 		t.Fatalf("mtg debe usar types: e ignorar supertype, got %q", got)
 	}
 }
 
 func TestBuildQueryPokemonSinSupertype(t *testing.T) {
-	got := buildQuery("pokemon", "mewtwo", "", "", "", "")
+	got := buildQuery("pokemon", "mewtwo", "", "", "", "", "")
 	if strings.Contains(got, "supertype:") {
 		t.Fatalf("no debe incluir supertype vacío, got %q", got)
 	}

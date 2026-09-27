@@ -25,6 +25,7 @@ import (
 	appAdmin "trample-back/internal/application/admin"
 	appAuth "trample-back/internal/application/auth"
 	appCatalog "trample-back/internal/application/catalog"
+	appDashboard "trample-back/internal/application/dashboard"
 	appListing "trample-back/internal/application/listing"
 	appOwner "trample-back/internal/application/owner"
 	appReservation "trample-back/internal/application/reservation"
@@ -65,12 +66,19 @@ func main() {
 	ownerRepo := postgres.NewOwnerRepository(pool)
 	reservationRepo := postgres.NewReservationRepository(pool)
 	saleRepo := postgres.NewSaleRepository(pool)
+	dashboardRepo := postgres.NewDashboardRepository(pool)
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
 	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, ownerRepo, trmClient)
+	// Alta de inventario desde el panel: el alta manual de cartas y el botón "+"
+	// que crea una expansión sin pasar por Scrydex.
+	manualCardRepo := postgres.NewManualCardRepositoryPG(pool)
+	cardImageRepo := postgres.NewCardImageRepositoryPG(pool)
+	manualListingUC := appCatalog.NewManualListingUseCase(manualCardRepo, listingRepo, ownerRepo, cardImageRepo, trmClient)
+	newExpansionUC := appCatalog.NewNewExpansionUseCase(expansionRepo)
 	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)
 	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, log)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
@@ -88,8 +96,6 @@ func main() {
 	deleteOwnerUC := appOwner.NewDeleteOwnerUseCase(ownerRepo)
 	createAdminUC := appAdmin.NewCreateAdminUseCase(userRepo, adminUserRepo, panelRepo)
 	listAdminsUC := appAdmin.NewListAdminsUseCase(adminUserRepo)
-	updateRoleUC := appAdmin.NewUpdateRoleUseCase(adminUserRepo)
-	updatePanelsUC := appAdmin.NewUpdatePanelsUseCase(adminUserRepo, panelRepo)
 	updateAdminUserUC := appAdmin.NewUpdateAdminUserUseCase(userRepo, adminUserRepo, panelRepo)
 	panelsListUC := appAdmin.NewPanelsListUseCase(panelRepo)
 	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(adminUserRepo)
@@ -97,6 +103,7 @@ func main() {
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
 	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
+	dashboardSummaryUC := appDashboard.NewSummaryUseCase(dashboardRepo)
 
 	// Router
 	secureCookie := cfg.Env == "production"
@@ -111,9 +118,12 @@ func main() {
 		Webhook:        httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
-		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateRoleUC, updatePanelsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
+		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
 		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
+		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC),
+		Inventory:      httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
+		CardImages:     httpadapter.NewCardImageHandler(cardImageRepo),
 		AuthMiddleware: authMiddleware,
 		AllowedOrigins: cfg.AllowedOrigins,
 	})
@@ -129,10 +139,9 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	// Job de respaldo: refresca en lotes las cartas cuyo precio en Scrydex
-	// tiene más de una semana, para cubrir también las que nadie consulta
-	// (el refresco perezoso en ListCardsUseCase solo cubre cartas que se
-	// listan).
+	// Refresco periódico de precios: actualiza en lotes las cartas cuyo precio
+	// en Scrydex lleva demasiado tiempo sin tocarse. El umbral lo fija
+	// appCatalog.PriceStaleAfter, que es de 30 días.
 	bgCtx, cancelBg := context.WithCancel(context.Background())
 	go runPriceRefreshJob(bgCtx, priceRefresherUC, log)
 
@@ -156,9 +165,8 @@ func main() {
 	_ = srv.Shutdown(ctx)
 }
 
-// runPriceRefreshJob es el respaldo periódico del refresco perezoso de
-// precios: cada tick busca cartas con más de una semana sin consultarse en
-// Scrydex y las actualiza en lotes hasta agotar el backlog.
+// runPriceRefreshJob refresca precios periódicamente: cada tick busca las
+// cartas más desactualizadas y las actualiza en lotes hasta agotar el backlog.
 func runPriceRefreshJob(ctx context.Context, refresher *appCatalog.PriceRefresher, log *slog.Logger) {
 	const (
 		tick      = 24 * time.Hour

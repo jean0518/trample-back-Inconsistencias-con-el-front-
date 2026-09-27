@@ -22,7 +22,10 @@ type Handlers struct {
 	Cart           *CartHandler
 	Sales          *SaleHandler
 	AdminUsers     *AdminUserHandler
+	Dashboard      *DashboardHandler
 	Webhook        *WebhookHandler
+	Inventory      *InventoryHandler
+	CardImages     *CardImageHandler
 	AuthMiddleware *AuthMiddleware
 	AllowedOrigins []string
 }
@@ -80,6 +83,11 @@ func NewRouter(h Handlers) http.Handler {
 
 	r.Get("/games", h.Games.List)
 	r.Get("/expansions", h.Games.ListExpansions)
+
+	// Frontales de las cartas que el staff subió como archivo. Es público por la
+	// misma razón que /expansions: el catálogo es público y una imagen no debe
+	// dejar de cargar porque la carta esté pausada.
+	r.Get("/card-images/{id}", h.CardImages.Get)
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Use(httprate.LimitByIP(10, time.Minute))
@@ -158,6 +166,14 @@ func NewRouter(h Handlers) http.Handler {
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermInventario)).
 			Post("/cards/import-listing", h.Pokemon.ImportToListing)
 
+		// Alta de inventario sin pasar por Scrydex. Acepta JSON o
+		// multipart/form-data, según se mande la URL del frontal o un archivo.
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermInventario)).
+			Post("/cards/manual-listing", h.Inventory.ManualListing)
+		// Botón "+" del selector de expansión del formulario de alta manual.
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermInventario)).
+			Post("/expansions", h.Inventory.CreateExpansion)
+
 		r.Route("/owners", func(r chi.Router) {
 			r.Use(h.AuthMiddleware.RequirePermission(auth.PermPropietarios))
 			r.Get("/", h.Owners.List)
@@ -171,6 +187,11 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/sales", h.Sales.ListAdminSales)
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermResumen)).
 			Get("/sales-stats", h.Sales.SalesStats)
+
+		// Vista de resumen: una sola llamada con los KPI y los pedidos
+		// recientes, en vez de varias consultas que el frontend debe contar.
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermResumen)).
+			Get("/dashboard/summary", h.Dashboard.GetSummary)
 
 		r.Get("/panels", h.AdminUsers.ListPanels)
 
@@ -199,8 +220,6 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Get("/", h.AdminUsers.List)
 		r.Post("/", h.AdminUsers.Create)
-		r.Patch("/{id}/role", h.AdminUsers.UpdateRole)
-		r.Patch("/{id}/permissions", h.AdminUsers.UpdatePermissions)
 		r.Patch("/{id}", h.AdminUsers.Update)
 		r.Delete("/{id}", h.AdminUsers.Delete)
 	})

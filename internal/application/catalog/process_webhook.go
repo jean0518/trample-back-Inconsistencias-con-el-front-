@@ -32,15 +32,21 @@ type WebhookEventData struct {
 	ExpansionIDs []string `json:"expansion_ids"`
 }
 
-// ProcessWebhookUseCase recibe eventos de precio de Scrydex y sincroniza
-// todas las cartas de las expansiones afectadas en la base de datos.
+// ProcessWebhookUseCase recibe eventos de precio de Scrydex y actualiza el
+// precio de las cartas que YA están dadas de alta.
+//
+// No inserta cartas. Los eventos de precio traen la expansión completa, así que
+// antes de esto se sincronizaban las ~100 cartas de cada set informado y la tabla
+// `cards`crecía con el catálogo completo de Scrydex sin que nadie hubiera dado de
+// alta un listing. Ahora una carta que no está en la base se ignora: el alta
+// sigue siendo responsabilidad del flujo de listings.
 type ProcessWebhookUseCase struct {
 	search *SearchScrydex
-	repo   out.CardRepository
+	repo   out.CardPriceRefresher
 	log    *slog.Logger
 }
 
-func NewProcessWebhookUseCase(search *SearchScrydex, repo out.CardRepository, log *slog.Logger) *ProcessWebhookUseCase {
+func NewProcessWebhookUseCase(search *SearchScrydex, repo out.CardPriceRefresher, log *slog.Logger) *ProcessWebhookUseCase {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -60,6 +66,7 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 	)
 
 	var firstErr error
+	refreshed, skipped := 0, 0
 	for _, expansionID := range event.Data.ExpansionIDs {
 		cards, err := uc.search.FetchExpansionCards(ctx, gameCode, expansionID)
 		if err != nil {
@@ -74,22 +81,30 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 		}
 
 		for _, card := range cards {
-			if err := uc.repo.SyncCard(ctx, gameCode, card); err != nil {
-				uc.log.Warn("webhook: no se pudo sincronizar carta",
+			ok, err := uc.repo.RefreshCardPrices(ctx, gameCode, card)
+			if err != nil {
+				uc.log.Warn("webhook: no se pudo actualizar el precio",
 					slog.String("external_id", card.ExternalID),
 					slog.Any("error", err),
 				)
 				if firstErr == nil {
 					firstErr = err
 				}
+				continue
+			}
+			if ok {
+				refreshed++
+			} else {
+				skipped++
 			}
 		}
-
-		uc.log.Info("webhook: expansión sincronizada",
-			slog.String("expansion_id", expansionID),
-			slog.Int("cards", len(cards)),
-		)
 	}
+
+	uc.log.Info("webhook: precios actualizados",
+		slog.String("event_name", event.Name),
+		slog.Int("cartas_actualizadas", refreshed),
+		slog.Int("cartas_ignoradas_sin_alta", skipped),
+	)
 
 	return firstErr
 }

@@ -21,13 +21,15 @@ func NewSaleHandler(confirm *appSale.ConfirmSaleUseCase, list *appSale.ListSales
 }
 
 // canSeeAllSales indica si el usuario puede consultar el historial completo de
-// ventas: admins y el staff con acceso al panel de ventas o de pedidos.
+// ventas: admins y el staff con acceso al panel de ventas, de pedidos o de
+// resumen (el panel "Resumen" cuenta los pedidos recientes, así que el
+// permiso 'resumen' también lo habilita).
 func canSeeAllSales(user AuthUser) bool {
 	if user.Role == auth.RoleAdmin || user.Role == auth.RoleColaborador || user.Role == auth.RoleSupColaborador {
 		return true
 	}
 	for _, p := range user.Permissions {
-		if p == auth.PermVentas || p == auth.PermPedidos {
+		if p == auth.PermVentas || p == auth.PermPedidos || p == auth.PermResumen {
 			return true
 		}
 	}
@@ -269,7 +271,13 @@ type salesStatsResponse struct {
 //	@Failure      500  {object}  object{error=string}
 //	@Router       /admin/sales/stats [get]
 func (h *SaleHandler) SalesStats(w http.ResponseWriter, r *http.Request) {
+	// Se normaliza el periodo antes de usarlo: el caso de uso aplica el mismo
+	// default, pero la respuesta debe devolver el periodo con el que se
+	// calculó y no el que llegó vacío desde el frontend.
 	period := r.URL.Query().Get("period")
+	if period != "week" {
+		period = "day"
+	}
 	buckets, _ := strconv.Atoi(r.URL.Query().Get("buckets"))
 
 	bucketsList, err := h.stats.Stats(r.Context(), period, buckets)

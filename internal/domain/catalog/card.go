@@ -132,3 +132,34 @@ type Price struct {
 	LowCOP    int64   `json:"low_cop"`
 	TRMUsed   float64 `json:"trm_used"`
 }
+
+// PriceUpdate es el cambio de precio de mercado de una variante que ya estaba
+// dada de alta. Lo devuelve el refresco de precios para que quien lo dispara
+// (el webhook) pueda dejar constancia de qué carta cambió y cuánto.
+type PriceUpdate struct {
+	VariantName string
+	// HadPrice indica si la variante ya tenía precio. Si es false, OldUSD no
+	// significa nada: es el primer precio que recibe.
+	HadPrice bool
+	OldUSD   float64
+	NewUSD   float64
+	NewCOP   int64
+	// ListingsRepriced es la cantidad de listings de la variante que quedaron
+	// con el precio nuevo.
+	ListingsRepriced int64
+}
+
+// CardPriceChange es el cambio de precio de una variante junto con los datos de
+// la carta, tal como se le notifica al staff.
+type CardPriceChange struct {
+	ExpansionID string
+	ExternalID  string
+	CardName    string
+	Update      PriceUpdate
+}
+
+// Changed indica si el precio de mercado realmente cambió. Scrydex avisa por
+// expansión completa, así que muchas variantes vuelven con el mismo precio.
+func (c CardPriceChange) Changed() bool {
+	return !c.Update.HadPrice || c.Update.OldUSD != c.Update.NewUSD
+}

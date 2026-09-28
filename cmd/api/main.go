@@ -22,6 +22,7 @@ import (
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
 	"trample-back/internal/adapters/out/supabase"
+	"trample-back/internal/adapters/out/telegram"
 	"trample-back/internal/adapters/out/trm"
 	appAdmin "trample-back/internal/application/admin"
 	appAuth "trample-back/internal/application/auth"
@@ -85,7 +86,10 @@ func main() {
 	manualListingUC := appCatalog.NewManualListingUseCase(manualCardRepo, listingRepo, ownerRepo, cardImageRepo, trmClient)
 	newExpansionUC := appCatalog.NewNewExpansionUseCase(expansionRepo)
 	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)
-	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, log)
+	// Aviso por Telegram de los precios del inventario que cambian con el
+	// webhook. Si faltan las variables queda desactivado.
+	priceNotifier := telegram.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
+	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, priceNotifier, log)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
 	registerUC := appAuth.NewRegisterUseCase(userRepo)

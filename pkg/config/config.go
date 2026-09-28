@@ -20,6 +20,8 @@ type Config struct {
 	SupabaseURL            string
 	SupabaseServiceRoleKey string
 	SupabaseStorageBucket  string
+	TelegramBotToken       string
+	TelegramChatID         string
 }
 
 func Load() (*Config, error) {
@@ -62,6 +64,10 @@ func Load() (*Config, error) {
 		SupabaseURL:            envOr("SUPABASE_URL", ""),
 		SupabaseServiceRoleKey: envOr("SUPABASE_SERVICE_ROLE_KEY", ""),
 		SupabaseStorageBucket:  envOr("SUPABASE_STORAGE_BUCKET", ""),
+		// Opcionales: sin ellas el webhook actualiza precios igual, solo que
+		// no avisa por Telegram.
+		TelegramBotToken: envOr("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:   envOr("TELEGRAM_CHAT_ID", ""),
 	}, nil
 }
 

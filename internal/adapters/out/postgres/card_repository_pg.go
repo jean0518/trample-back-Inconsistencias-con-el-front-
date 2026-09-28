@@ -135,7 +135,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 			// copia queda con un precio diferente: todas las copias pasan a
 			// reflejar el precio de mercado vigente.
 			if variant.NMPrice.MarketUSD > 0 {
-				if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
+				if _, err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
 					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 				}
 			}
@@ -157,10 +157,10 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 // Esto sustituye al SyncCard que usaba el webhook, que al ser un UPSERT
 // sincronizaba la expansión entera y llenaba `cards` con miles de cartas sin
 // listing.
-func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string, card catalog.Card) (bool, error) {
+func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string, card catalog.Card) ([]catalog.PriceUpdate, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -174,12 +174,12 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// La carta no está dada de alta: no se crea nada.
-			return false, nil
+			return nil, nil
 		}
-		return false, fmt.Errorf("buscar carta %q: %w", card.ExternalID, err)
+		return nil, fmt.Errorf("buscar carta %q: %w", card.ExternalID, err)
 	}
 
-	updated := false
+	var updates []catalog.PriceUpdate
 	for _, variant := range card.Variants {
 		var variantID int64
 		err = tx.QueryRow(ctx, `
@@ -190,11 +190,28 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 				// Variante que no tenemos dada de alta: se ignora.
 				continue
 			}
-			return false, fmt.Errorf("buscar variante %q: %w", variant.Name, err)
+			return nil, fmt.Errorf("buscar variante %q: %w", variant.Name, err)
 		}
 
 		if variant.NMPrice == nil {
 			continue
+		}
+
+		// Se lee el precio anterior antes de sobreescribirlo, para poder
+		// informar cuánto cambió.
+		update := catalog.PriceUpdate{
+			VariantName: variant.Name,
+			NewUSD:      variant.NMPrice.MarketUSD,
+			NewCOP:      variant.NMPrice.MarketCOP,
+		}
+		err = tx.QueryRow(ctx, `
+			SELECT price_usd FROM variant_prices WHERE variant_id = $1 AND condition = 'near_mint'
+		`, variantID).Scan(&update.OldUSD)
+		switch {
+		case err == nil:
+			update.HadPrice = true
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, fmt.Errorf("leer precio anterior de la variante %q: %w", variant.Name, err)
 		}
 
 		if _, err := tx.Exec(ctx, `
@@ -206,28 +223,33 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 				trm_used   = EXCLUDED.trm_used,
 				fetched_at = now()
 		`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP, variant.NMPrice.TRMUsed); err != nil {
-			return false, fmt.Errorf("upsert precio variante %q: %w", variant.Name, err)
+			return nil, fmt.Errorf("upsert precio variante %q: %w", variant.Name, err)
 		}
 
 		// Re-preciar los listings de la variante al precio de mercado recién
 		// actualizado, igual que hace SyncCard, para que dos copias de la misma
 		// carta no queden con precios distintos.
 		if variant.NMPrice.MarketUSD > 0 {
-			if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
-				return false, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
+			repriced, err := repriceListings(ctx, tx, variantID, variant.NMPrice)
+			if err != nil {
+				return nil, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 			}
+			update.ListingsRepriced = repriced
 		}
 
 		if _, err := tx.Exec(ctx, `UPDATE card_variants SET last_price_check_at = now() WHERE id = $1`, variantID); err != nil {
-			return false, fmt.Errorf("actualizar last_price_check_at: %w", err)
+			return nil, fmt.Errorf("actualizar last_price_check_at: %w", err)
 		}
-		updated = true
+		updates = append(updates, update)
 	}
 
-	if !updated {
-		return false, nil
+	if len(updates) == 0 {
+		return nil, nil
 	}
-	return true, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return updates, nil
 }
 
 // ListedExternalIDs devuelve las cartas de la expansión con algún listing
@@ -272,10 +294,12 @@ func (r *CardRepository) ListedExternalIDs(ctx context.Context, gameCode, expans
 // descuento se aplica sobre el USD y el COP se recalcula desde ahí con la regla
 // de siempre (mínimo 2.000 y redondeo al millar), igual que al importarlas. Si
 // se descontara el COP ya redondeado quedarían precios como 8.800 o 1.600.
-func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *catalog.Price) error {
+//
+// Devuelve cuántos listings quedaron con el precio nuevo.
+func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *catalog.Price) (int64, error) {
 	spanishUSD := listing.SpanishPriceUSD(price.MarketUSD)
 	spanishCOP := listing.StandardizedPriceCOP(spanishUSD, price.TRMUsed)
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE inventory_listings
 		SET
 			price_usd = CASE WHEN language IN ('Spanish', 'Español') THEN $4::numeric ELSE $2::numeric END,
@@ -283,7 +307,10 @@ func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *cat
 			updated_at = now()
 		WHERE variant_id = $1
 	`, variantID, price.MarketUSD, price.MarketCOP, spanishUSD, spanishCOP)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {

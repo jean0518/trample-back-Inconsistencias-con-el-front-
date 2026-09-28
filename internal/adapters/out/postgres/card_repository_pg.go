@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 	"trample-back/internal/domain/catalog"
+	"trample-back/internal/domain/listing"
 	"trample-back/internal/ports/out"
 
 	"github.com/jackc/pgx/v5"
@@ -134,22 +135,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 			// copia queda con un precio diferente: todas las copias pasan a
 			// reflejar el precio de mercado vigente.
 			if variant.NMPrice.MarketUSD > 0 {
-				if _, err := tx.Exec(ctx, `
-					UPDATE inventory_listings
-					SET
-						price_usd = CASE
-							WHEN language IN ('Spanish', 'Español')
-							THEN ROUND(($2 * 0.80)::numeric, 2)
-							ELSE $2
-						END,
-						price_cop = CASE
-							WHEN language IN ('Spanish', 'Español')
-							THEN ROUND(($3 * 0.80)::numeric, 0)
-							ELSE $3
-						END,
-						updated_at = now()
-					WHERE variant_id = $1
-				`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+				if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
 					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 				}
 			}
@@ -227,22 +213,7 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 		// actualizado, igual que hace SyncCard, para que dos copias de la misma
 		// carta no queden con precios distintos.
 		if variant.NMPrice.MarketUSD > 0 {
-			if _, err := tx.Exec(ctx, `
-				UPDATE inventory_listings
-				SET
-					price_usd = CASE
-						WHEN language IN ('Spanish', 'Español')
-						THEN ROUND(($2 * 0.80)::numeric, 2)
-						ELSE $2
-					END,
-					price_cop = CASE
-						WHEN language IN ('Spanish', 'Español')
-						THEN ROUND(($3 * 0.80)::numeric, 0)
-						ELSE $3
-					END,
-					updated_at = now()
-				WHERE variant_id = $1
-			`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+			if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
 				return false, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 			}
 		}
@@ -257,6 +228,62 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 		return false, nil
 	}
 	return true, tx.Commit(ctx)
+}
+
+// ListedExternalIDs devuelve las cartas de la expansión con algún listing
+// activo y con stock.
+//
+// Las cartas dadas de alta a mano (external_id "manual:...") se excluyen: no
+// existen en Scrydex, así que nunca van a venir en el set y solo harían gastar
+// la llamada. Una expansión personalizada tampoco llega nunca por aquí, porque
+// Scrydex solo avisa con sus propios IDs.
+func (r *CardRepository) ListedExternalIDs(ctx context.Context, gameCode, expansionExternalID string) (map[string]bool, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT c.external_id
+		FROM cards c
+		JOIN games g ON g.id = c.game_id
+		JOIN expansions e ON e.id = c.expansion_id
+		JOIN card_variants cv ON cv.card_id = c.id
+		JOIN inventory_listings il ON il.variant_id = cv.id
+		WHERE g.code = $1
+		  AND e.external_id = $2
+		  AND il.status = 'active'
+		  AND il.quantity > 0
+		  AND NOT starts_with(c.external_id, $3)
+	`, gameCode, expansionExternalID, catalog.ManualIDPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("listar cartas con listing de la expansión %q: %w", expansionExternalID, err)
+	}
+	defer rows.Close()
+
+	listed := make(map[string]bool)
+	for rows.Next() {
+		var externalID string
+		if err := rows.Scan(&externalID); err != nil {
+			return nil, err
+		}
+		listed[externalID] = true
+	}
+	return listed, rows.Err()
+}
+
+// repriceListings deja los listings de la variante al precio de mercado recién
+// actualizado. Las cartas en español van al 80 % del precio en inglés: el
+// descuento se aplica sobre el USD y el COP se recalcula desde ahí con la regla
+// de siempre (mínimo 2.000 y redondeo al millar), igual que al importarlas. Si
+// se descontara el COP ya redondeado quedarían precios como 8.800 o 1.600.
+func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *catalog.Price) error {
+	spanishUSD := listing.SpanishPriceUSD(price.MarketUSD)
+	spanishCOP := listing.StandardizedPriceCOP(spanishUSD, price.TRMUsed)
+	_, err := tx.Exec(ctx, `
+		UPDATE inventory_listings
+		SET
+			price_usd = CASE WHEN language IN ('Spanish', 'Español') THEN $4::numeric ELSE $2::numeric END,
+			price_cop = CASE WHEN language IN ('Spanish', 'Español') THEN $5::numeric ELSE $3::numeric END,
+			updated_at = now()
+		WHERE variant_id = $1
+	`, variantID, price.MarketUSD, price.MarketCOP, spanishUSD, spanishCOP)
+	return err
 }
 
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
@@ -530,11 +557,15 @@ func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Dura
 			WHERE il.variant_id = cv.id AND il.status = 'active' AND il.quantity > 0
 		)
 		AND NOT (g.code = 'pokemon' AND e.series = 'Pokémon Pocket')
+		-- Las cartas y expansiones manuales no existen en Scrydex: nunca se
+		-- refrescarían y, al seguir siendo las más viejas, ocuparían el lote.
+		AND NOT starts_with(c.external_id, $3)
+		AND NOT starts_with(e.external_id, $3)
 		GROUP BY c.id, g.code, c.external_id, e.external_id
 		HAVING MIN(cv.last_price_check_at) IS NULL OR MIN(cv.last_price_check_at) < $1
 		ORDER BY MIN(cv.last_price_check_at) ASC NULLS FIRST
 		LIMIT $2
-	`, threshold, limit)
+	`, threshold, limit, catalog.ManualIDPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("listar cartas con precio desactualizado: %w", err)
 	}

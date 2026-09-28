@@ -12,9 +12,9 @@ import (
 // terminen sobre una sola variante en lugar de duplicarse.
 const DefaultVariantName = "non-foil"
 
-// manualIDPrefix evita que los identificadores derivados de un alta manual
+// ManualIDPrefix evita que los identificadores derivados de un alta manual
 // colisionen con los que asigna Scrydex (ej: "tcgp-001").
-const manualIDPrefix = "manual:"
+const ManualIDPrefix = "manual:"
 
 // ManualCard es una carta que el staff del panel registra directamente en el
 // inventario, sin consultarla en Scrydex. Reúne los datos de expansión, carta
@@ -124,7 +124,7 @@ func ManualExternalIDFor(explicit, name, number string) string {
 	if num := slug(number); num != "" {
 		base += "-" + num
 	}
-	return manualIDPrefix + base
+	return ManualIDPrefix + base
 }
 
 

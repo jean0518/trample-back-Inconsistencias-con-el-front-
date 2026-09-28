@@ -23,3 +23,15 @@ func StandardizedPriceCOP(priceUSD, trm float64) float64 {
 	cop := priceUSD * trm
 	return math.Ceil(cop/PriceRoundingStepCOP) * PriceRoundingStepCOP
 }
+
+// SpanishPriceFactor es la fracción del precio en inglés a la que se venden las
+// cartas en español. Scrydex no indexa cartas en español, así que su precio
+// siempre se deriva del de la versión en inglés.
+const SpanishPriceFactor = 0.80
+
+// SpanishPriceUSD es el precio en USD de la carta en español a partir del precio
+// en inglés, redondeado a centavos. El precio en COP se saca de este valor con
+// StandardizedPriceCOP, igual que cualquier otro listing.
+func SpanishPriceUSD(englishUSD float64) float64 {
+	return math.Round(englishUSD*SpanishPriceFactor*100) / 100
+}

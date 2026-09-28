@@ -259,6 +259,43 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 	return true, tx.Commit(ctx)
 }
 
+// ListedExternalIDs devuelve las cartas de la expansión con algún listing
+// activo y con stock.
+//
+// Las cartas dadas de alta a mano (external_id "manual:...") se excluyen: no
+// existen en Scrydex, así que nunca van a venir en el set y solo harían gastar
+// la llamada. Una expansión personalizada tampoco llega nunca por aquí, porque
+// Scrydex solo avisa con sus propios IDs.
+func (r *CardRepository) ListedExternalIDs(ctx context.Context, gameCode, expansionExternalID string) (map[string]bool, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT c.external_id
+		FROM cards c
+		JOIN games g ON g.id = c.game_id
+		JOIN expansions e ON e.id = c.expansion_id
+		JOIN card_variants cv ON cv.card_id = c.id
+		JOIN inventory_listings il ON il.variant_id = cv.id
+		WHERE g.code = $1
+		  AND e.external_id = $2
+		  AND il.status = 'active'
+		  AND il.quantity > 0
+		  AND NOT starts_with(c.external_id, $3)
+	`, gameCode, expansionExternalID, catalog.ManualIDPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("listar cartas con listing de la expansión %q: %w", expansionExternalID, err)
+	}
+	defer rows.Close()
+
+	listed := make(map[string]bool)
+	for rows.Next() {
+		var externalID string
+		if err := rows.Scan(&externalID); err != nil {
+			return nil, err
+		}
+		listed[externalID] = true
+	}
+	return listed, rows.Err()
+}
+
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
 	offset := (p.Page - 1) * p.PageSize
 
@@ -530,11 +567,15 @@ func (r *CardRepository) ListStaleCards(ctx context.Context, olderThan time.Dura
 			WHERE il.variant_id = cv.id AND il.status = 'active' AND il.quantity > 0
 		)
 		AND NOT (g.code = 'pokemon' AND e.series = 'Pokémon Pocket')
+		-- Las cartas y expansiones manuales no existen en Scrydex: nunca se
+		-- refrescarían y, al seguir siendo las más viejas, ocuparían el lote.
+		AND NOT starts_with(c.external_id, $3)
+		AND NOT starts_with(e.external_id, $3)
 		GROUP BY c.id, g.code, c.external_id, e.external_id
 		HAVING MIN(cv.last_price_check_at) IS NULL OR MIN(cv.last_price_check_at) < $1
 		ORDER BY MIN(cv.last_price_check_at) ASC NULLS FIRST
 		LIMIT $2
-	`, threshold, limit)
+	`, threshold, limit, catalog.ManualIDPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("listar cartas con precio desactualizado: %w", err)
 	}

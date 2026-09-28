@@ -11,7 +11,8 @@ import (
 // fakeWebhookScrydex devuelve un set completo de cartas, como hace Scrydex en los
 // eventos de precio.
 type fakeWebhookScrydex struct {
-	cards []catalog.Card
+	cards   []catalog.Card
+	fetches int
 }
 
 func (f *fakeWebhookScrydex) SearchCards(context.Context, out.SearchParams) ([]catalog.Card, error) {
@@ -24,14 +25,19 @@ func (f *fakeWebhookScrydex) FetchExpansions(context.Context, string) ([]catalog
 	return nil, nil
 }
 func (f *fakeWebhookScrydex) FetchExpansionCards(context.Context, string, string) ([]catalog.Card, error) {
+	f.fetches++
 	return f.cards, nil
 }
 
 // fakePriceRefresher registra a qué cartas se le pidió refrescar el precio y
-// simula que solo algunas existen en la base.
+// simula que solo algunas tienen listing en el inventario.
 type fakePriceRefresher struct {
 	vistas     []string
 	existentes map[string]bool
+}
+
+func (f *fakePriceRefresher) ListedExternalIDs(context.Context, string, string) (map[string]bool, error) {
+	return f.existentes, nil
 }
 
 func (f *fakePriceRefresher) RefreshCardPrices(_ context.Context, _ string, card catalog.Card) (bool, error) {
@@ -50,16 +56,15 @@ func cartaWebhook(externalID string) catalog.Card {
 	}
 }
 
-// El webhook recibe la expansión completa pero solo debe tocar el precio de las
-// cartas que ya están dadas de alta. Antes usaba SyncCard (UPSERT) e insertaba
-// las ~100 cartas de cada set, llenando `cards` con el catálogo de Scrydex.
-func TestExecuteSoloRefrescaPreciosDeCartasExistentes(t *testing.T) {
+// El webhook recibe la expansión completa pero solo debe refrescar las cartas
+// que tienen listing: las demás ni se mandan al repositorio.
+func TestExecuteSoloRefrescaCartasConListing(t *testing.T) {
 	scrydex := &fakeWebhookScrydex{cards: []catalog.Card{
-		cartaWebhook("dada-de-alta"),
-		cartaWebhook("no-dada-de-alta"),
+		cartaWebhook("listada"),
+		cartaWebhook("no-listada"),
 		cartaWebhook("tampoco"),
 	}}
-	repo := &fakePriceRefresher{existentes: map[string]bool{"dada-de-alta": true}}
+	repo := &fakePriceRefresher{existentes: map[string]bool{"listada": true}}
 
 	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil)
 	err := uc.Execute(context.Background(), WebhookEvent{
@@ -71,20 +76,29 @@ func TestExecuteSoloRefrescaPreciosDeCartasExistentes(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if len(repo.vistas) != 3 {
-		t.Fatalf("se consultaron %d cartas, se esperaban las 3 del set: %v", len(repo.vistas), repo.vistas)
+	if len(repo.vistas) != 1 || repo.vistas[0] != "listada" {
+		t.Fatalf("se esperaba refrescar solo la carta listada, se refrescaron: %v", repo.vistas)
 	}
-	// Lo importante: se avisó de las tres, pero el repositorio decide cuál
-	// existe. El webhook no decide insertar nada.
-	for _, id := range []string{"dada-de-alta", "no-dada-de-alta", "tampoco"} {
-		found := false
-		for _, v := range repo.vistas {
-			if v == id {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("la carta %q no se mandó a refrescar", id)
-		}
+}
+
+// Una expansión sin nada en el inventario no debe gastar la llamada a Scrydex.
+func TestExecuteSaltaExpansionesSinListing(t *testing.T) {
+	scrydex := &fakeWebhookScrydex{cards: []catalog.Card{cartaWebhook("x")}}
+	repo := &fakePriceRefresher{existentes: map[string]bool{}}
+
+	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil)
+	err := uc.Execute(context.Background(), WebhookEvent{
+		ID:   "evt_2",
+		Name: "pokemon.expansions.prices.raw_updated",
+		Data: WebhookEventData{ExpansionIDs: []string{"base-1", "base-2"}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if scrydex.fetches != 0 {
+		t.Fatalf("se consultó Scrydex %d veces para expansiones sin listing", scrydex.fetches)
+	}
+	if len(repo.vistas) != 0 {
+		t.Fatalf("no se esperaba refrescar ninguna carta: %v", repo.vistas)
 	}
 }

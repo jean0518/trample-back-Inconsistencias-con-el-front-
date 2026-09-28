@@ -76,7 +76,7 @@ func ExpansionExternalIDForManual(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("el nombre de la expansión es requerido")
 	}
-	return manualIDPrefix + slugOr(name, "expansion"), nil
+	return ManualIDPrefix + slugOr(name, "expansion"), nil
 }
 
 // normalizeReleaseDate acepta "2024-09-06" (ISO, el que usa Scrydex) y

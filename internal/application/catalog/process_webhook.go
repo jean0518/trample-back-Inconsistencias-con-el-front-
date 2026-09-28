@@ -33,7 +33,10 @@ type WebhookEventData struct {
 }
 
 // ProcessWebhookUseCase recibe eventos de precio de Scrydex y actualiza el
-// precio de las cartas que YA están dadas de alta.
+// precio de las cartas que tienen listing en el inventario.
+//
+// Las expansiones sin nada listado se saltan sin consultar Scrydex, y de las
+// que sí tienen, solo se refrescan las cartas listadas.
 //
 // No inserta cartas. Los eventos de precio traen la expansión completa, así que
 // antes de esto se sincronizaban las ~100 cartas de cada set informado y la tabla
@@ -66,8 +69,26 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 	)
 
 	var firstErr error
-	refreshed, skipped := 0, 0
+	refreshed, skipped, skippedExpansions := 0, 0, 0
 	for _, expansionID := range event.Data.ExpansionIDs {
+		// Primero se mira qué hay listado de la expansión: Scrydex avisa por set
+		// completo y la mayoría de sets no tienen nada en el inventario.
+		listed, err := uc.repo.ListedExternalIDs(ctx, gameCode, expansionID)
+		if err != nil {
+			uc.log.Warn("webhook: no se pudo consultar el inventario de la expansión",
+				slog.String("expansion_id", expansionID),
+				slog.Any("error", err),
+			)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if len(listed) == 0 {
+			skippedExpansions++
+			continue
+		}
+
 		cards, err := uc.search.FetchExpansionCards(ctx, gameCode, expansionID)
 		if err != nil {
 			uc.log.Warn("webhook: no se pudo obtener expansión",
@@ -81,6 +102,10 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 		}
 
 		for _, card := range cards {
+			if !listed[card.ExternalID] {
+				skipped++
+				continue
+			}
 			ok, err := uc.repo.RefreshCardPrices(ctx, gameCode, card)
 			if err != nil {
 				uc.log.Warn("webhook: no se pudo actualizar el precio",
@@ -103,7 +128,8 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 	uc.log.Info("webhook: precios actualizados",
 		slog.String("event_name", event.Name),
 		slog.Int("cartas_actualizadas", refreshed),
-		slog.Int("cartas_ignoradas_sin_alta", skipped),
+		slog.Int("cartas_ignoradas_sin_listing", skipped),
+		slog.Int("expansiones_sin_listing", skippedExpansions),
 	)
 
 	return firstErr

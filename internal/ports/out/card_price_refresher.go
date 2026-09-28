@@ -20,6 +20,12 @@ import (
 // carta que no existe en `cards` se ignora, y el alta sigue siendo
 // responsabilidad del flujo de listings.
 type CardPriceRefresher interface {
+	// ListedExternalIDs devuelve los external_id de las cartas de una expansión
+	// que tienen al menos un listing en el inventario. El webhook lo consulta
+	// antes de ir a Scrydex: si la expansión no tiene nada listado se salta sin
+	// gastar la llamada, y si tiene, solo esas cartas se refrescan.
+	ListedExternalIDs(ctx context.Context, gameCode, expansionExternalID string) (map[string]bool, error)
+
 	// RefreshCardPrices actualiza el precio de mercado de las variantes de la
 	// carta que ya existen y devuelve si encontró la carta. Si la carta o la
 	// variante no están en la base no inserta nada y devuelve false: el precio

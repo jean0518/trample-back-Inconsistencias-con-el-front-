@@ -40,9 +40,12 @@ func (f *fakePriceRefresher) ListedExternalIDs(context.Context, string, string) 
 	return f.existentes, nil
 }
 
-func (f *fakePriceRefresher) RefreshCardPrices(_ context.Context, _ string, card catalog.Card) (bool, error) {
+func (f *fakePriceRefresher) RefreshCardPrices(_ context.Context, _ string, card catalog.Card) ([]catalog.PriceUpdate, error) {
 	f.vistas = append(f.vistas, card.ExternalID)
-	return f.existentes[card.ExternalID], nil
+	if !f.existentes[card.ExternalID] {
+		return nil, nil
+	}
+	return []catalog.PriceUpdate{{VariantName: "Normal", HadPrice: true, OldUSD: 1, NewUSD: 1.5}}, nil
 }
 
 func cartaWebhook(externalID string) catalog.Card {
@@ -66,7 +69,7 @@ func TestExecuteSoloRefrescaCartasConListing(t *testing.T) {
 	}}
 	repo := &fakePriceRefresher{existentes: map[string]bool{"listada": true}}
 
-	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil)
+	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil, nil)
 	err := uc.Execute(context.Background(), WebhookEvent{
 		ID:   "evt_1",
 		Name: "pokemon.expansions.prices.raw_updated",
@@ -86,7 +89,7 @@ func TestExecuteSaltaExpansionesSinListing(t *testing.T) {
 	scrydex := &fakeWebhookScrydex{cards: []catalog.Card{cartaWebhook("x")}}
 	repo := &fakePriceRefresher{existentes: map[string]bool{}}
 
-	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil)
+	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, nil, nil)
 	err := uc.Execute(context.Background(), WebhookEvent{
 		ID:   "evt_2",
 		Name: "pokemon.expansions.prices.raw_updated",
@@ -100,5 +103,53 @@ func TestExecuteSaltaExpansionesSinListing(t *testing.T) {
 	}
 	if len(repo.vistas) != 0 {
 		t.Fatalf("no se esperaba refrescar ninguna carta: %v", repo.vistas)
+	}
+}
+
+type fakeNotifier struct {
+	llamadas int
+	cambios  []catalog.CardPriceChange
+}
+
+func (f *fakeNotifier) NotifyPriceUpdates(_ context.Context, _ string, changes []catalog.CardPriceChange) error {
+	f.llamadas++
+	f.cambios = append(f.cambios, changes...)
+	return nil
+}
+
+// fakeSamePriceRefresher simula una carta listada cuyo precio no cambió.
+type fakeSamePriceRefresher struct{ fakePriceRefresher }
+
+func (f *fakeSamePriceRefresher) RefreshCardPrices(context.Context, string, catalog.Card) ([]catalog.PriceUpdate, error) {
+	return []catalog.PriceUpdate{{VariantName: "Normal", HadPrice: true, OldUSD: 1.5, NewUSD: 1.5}}, nil
+}
+
+// Solo se avisa por Telegram de las cartas listadas cuyo precio cambió.
+func TestExecuteNotificaSoloCambiosReales(t *testing.T) {
+	event := WebhookEvent{
+		ID:   "evt_3",
+		Name: "pokemon.expansions.prices.raw_updated",
+		Data: WebhookEventData{ExpansionIDs: []string{"base-1"}},
+	}
+	scrydex := &fakeWebhookScrydex{cards: []catalog.Card{cartaWebhook("listada"), cartaWebhook("no-listada")}}
+
+	notifier := &fakeNotifier{}
+	repo := &fakePriceRefresher{existentes: map[string]bool{"listada": true}}
+	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, notifier, nil)
+	if err := uc.Execute(context.Background(), event); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if notifier.llamadas != 1 || len(notifier.cambios) != 1 || notifier.cambios[0].ExternalID != "listada" {
+		t.Fatalf("se esperaba un aviso con la carta listada, hubo %d avisos: %+v", notifier.llamadas, notifier.cambios)
+	}
+
+	notifier = &fakeNotifier{}
+	same := &fakeSamePriceRefresher{fakePriceRefresher{existentes: map[string]bool{"listada": true}}}
+	uc = NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), same, notifier, nil)
+	if err := uc.Execute(context.Background(), event); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if notifier.llamadas != 0 {
+		t.Fatalf("no se esperaba aviso si el precio no cambió, hubo %d", notifier.llamadas)
 	}
 }

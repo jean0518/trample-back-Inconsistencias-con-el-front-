@@ -27,8 +27,9 @@ type CardPriceRefresher interface {
 	ListedExternalIDs(ctx context.Context, gameCode, expansionExternalID string) (map[string]bool, error)
 
 	// RefreshCardPrices actualiza el precio de mercado de las variantes de la
-	// carta que ya existen y devuelve si encontró la carta. Si la carta o la
-	// variante no están en la base no inserta nada y devuelve false: el precio
-	// de una carta que nadie vende no interesa.
-	RefreshCardPrices(ctx context.Context, gameCode string, card catalog.Card) (bool, error)
+	// carta que ya existen y devuelve un PriceUpdate por cada variante que
+	// actualizó. Si la carta o la variante no están en la base no inserta nada
+	// y devuelve una lista vacía: el precio de una carta que nadie vende no
+	// interesa.
+	RefreshCardPrices(ctx context.Context, gameCode string, card catalog.Card) ([]catalog.PriceUpdate, error)
 }

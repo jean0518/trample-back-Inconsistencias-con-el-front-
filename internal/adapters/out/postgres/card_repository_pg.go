@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 	"trample-back/internal/domain/catalog"
+	"trample-back/internal/domain/listing"
 	"trample-back/internal/ports/out"
 
 	"github.com/jackc/pgx/v5"
@@ -134,22 +135,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 			// copia queda con un precio diferente: todas las copias pasan a
 			// reflejar el precio de mercado vigente.
 			if variant.NMPrice.MarketUSD > 0 {
-				if _, err := tx.Exec(ctx, `
-					UPDATE inventory_listings
-					SET
-						price_usd = CASE
-							WHEN language IN ('Spanish', 'Español')
-							THEN ROUND(($2 * 0.80)::numeric, 2)
-							ELSE $2
-						END,
-						price_cop = CASE
-							WHEN language IN ('Spanish', 'Español')
-							THEN ROUND(($3 * 0.80)::numeric, 0)
-							ELSE $3
-						END,
-						updated_at = now()
-					WHERE variant_id = $1
-				`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+				if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
 					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 				}
 			}
@@ -227,22 +213,7 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 		// actualizado, igual que hace SyncCard, para que dos copias de la misma
 		// carta no queden con precios distintos.
 		if variant.NMPrice.MarketUSD > 0 {
-			if _, err := tx.Exec(ctx, `
-				UPDATE inventory_listings
-				SET
-					price_usd = CASE
-						WHEN language IN ('Spanish', 'Español')
-						THEN ROUND(($2 * 0.80)::numeric, 2)
-						ELSE $2
-					END,
-					price_cop = CASE
-						WHEN language IN ('Spanish', 'Español')
-						THEN ROUND(($3 * 0.80)::numeric, 0)
-						ELSE $3
-					END,
-					updated_at = now()
-				WHERE variant_id = $1
-			`, variantID, variant.NMPrice.MarketUSD, variant.NMPrice.MarketCOP); err != nil {
+			if err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
 				return false, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 			}
 		}
@@ -294,6 +265,25 @@ func (r *CardRepository) ListedExternalIDs(ctx context.Context, gameCode, expans
 		listed[externalID] = true
 	}
 	return listed, rows.Err()
+}
+
+// repriceListings deja los listings de la variante al precio de mercado recién
+// actualizado. Las cartas en español van al 80 % del precio en inglés: el
+// descuento se aplica sobre el USD y el COP se recalcula desde ahí con la regla
+// de siempre (mínimo 2.000 y redondeo al millar), igual que al importarlas. Si
+// se descontara el COP ya redondeado quedarían precios como 8.800 o 1.600.
+func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *catalog.Price) error {
+	spanishUSD := listing.SpanishPriceUSD(price.MarketUSD)
+	spanishCOP := listing.StandardizedPriceCOP(spanishUSD, price.TRMUsed)
+	_, err := tx.Exec(ctx, `
+		UPDATE inventory_listings
+		SET
+			price_usd = CASE WHEN language IN ('Spanish', 'Español') THEN $4::numeric ELSE $2::numeric END,
+			price_cop = CASE WHEN language IN ('Spanish', 'Español') THEN $5::numeric ELSE $3::numeric END,
+			updated_at = now()
+		WHERE variant_id = $1
+	`, variantID, price.MarketUSD, price.MarketCOP, spanishUSD, spanishCOP)
+	return err
 }
 
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {

@@ -26,10 +26,15 @@ func TestBuildMessagesEscapaYParte(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("se esperaba 1 mensaje, hubo %d", len(msgs))
 	}
-	for _, want := range []string{"Magic", "&lt;Labyrinth&gt; &amp; co", "US$10.20 → US$12.50", "$50.000 COP", "Español: US$10.00", "2 listings"} {
+	for _, want := range []string{"Magic", "&lt;Labyrinth&gt; &amp; co", "US$10.20 → US$12.50", "$50.000 COP", "2 listings"} {
 		if !strings.Contains(msgs[0], want) {
 			t.Errorf("el mensaje no contiene %q:\n%s", want, msgs[0])
 		}
+	}
+	// Magic no tiene descuento por idioma: el precio de venta es el de mercado,
+	// así que ofrecer un "precio en español" sería un precio que nadie paga.
+	if strings.Contains(msgs[0], "Español") {
+		t.Errorf("un evento de Magic no debe anunciar precio en español:\n%s", msgs[0])
 	}
 
 	many := make([]catalog.CardPriceChange, 100)
@@ -44,6 +49,23 @@ func TestBuildMessagesEscapaYParte(t *testing.T) {
 		if len(m) > 4096 {
 			t.Errorf("mensaje de %d caracteres supera el límite de Telegram", len(m))
 		}
+	}
+}
+
+func TestBuildMessagesAnunciaElDescuentoSoloEnPokemon(t *testing.T) {
+	change := catalog.CardPriceChange{
+		ExpansionID: "ME55",
+		CardName:    "Mew ex",
+		Update:      catalog.PriceUpdate{VariantName: "holofoil", HadPrice: true, OldUSD: 80, NewUSD: 100, NewCOP: 400000, ListingsRepriced: 3},
+	}
+	msgs := buildMessages(catalog.PriceReport{GameCode: "pokemon", Changes: []catalog.CardPriceChange{change}})
+	if len(msgs) != 1 {
+		t.Fatalf("se esperaba 1 mensaje, hubo %d", len(msgs))
+	}
+	// El español de Pokémon sí se publica al 80 %, y es el único idioma con
+	// descuento, así que el aviso debe ofrecerlo.
+	if want := "Español: US$80.00"; !strings.Contains(msgs[0], want) {
+		t.Errorf("el mensaje no contiene %q:\n%s", want, msgs[0])
 	}
 }
 

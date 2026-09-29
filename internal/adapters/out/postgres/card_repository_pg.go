@@ -135,7 +135,7 @@ func (r *CardRepository) SyncCard(ctx context.Context, gameCode string, card cat
 			// copia queda con un precio diferente: todas las copias pasan a
 			// reflejar el precio de mercado vigente.
 			if variant.NMPrice.MarketUSD > 0 {
-				if _, err := repriceListings(ctx, tx, variantID, variant.NMPrice); err != nil {
+				if _, err := repriceListings(ctx, tx, gameCode, variantID, variant.NMPrice); err != nil {
 					return fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 				}
 			}
@@ -230,7 +230,7 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 		// actualizado, igual que hace SyncCard, para que dos copias de la misma
 		// carta no queden con precios distintos.
 		if variant.NMPrice.MarketUSD > 0 {
-			repriced, err := repriceListings(ctx, tx, variantID, variant.NMPrice)
+			repriced, err := repriceListings(ctx, tx, gameCode, variantID, variant.NMPrice)
 			if err != nil {
 				return nil, fmt.Errorf("re-preciar listings de la variante %q: %w", variant.Name, err)
 			}
@@ -308,23 +308,31 @@ func (r *CardRepository) ListedExternalIDs(ctx context.Context, gameCode, expans
 }
 
 // repriceListings deja los listings de la variante al precio de mercado recién
-// actualizado. Las cartas en español van al 80 % del precio en inglés: el
-// descuento se aplica sobre el USD y el COP se recalcula desde ahí con la regla
-// de siempre (mínimo 2.000 y redondeo al millar), igual que al importarlas. Si
-// se descontara el COP ya redondeado quedarían precios como 8.800 o 1.600.
+// actualizado. El precio no depende del idioma del listing salvo para el español
+// de Pokémon, que va al 80 %: el descuento se aplica sobre el USD y el COP se
+// recalcula desde ahí con la regla de siempre (mínimo 2.000 y redondeo al
+// millar), igual que al importarlas. Si se descontara el COP ya redondeado
+// quedarían precios como 8.800 o 1.600.
+//
+// El descuento se decide en Go (listing.IsDiscountedLanguage) y viaja como
+// booleano: así el "pokemon" y el español están escritos en un solo lugar y el
+// SQL no puede quedarse atrás si la regla cambia. Al SQL solo le corresponde
+// reconocer las dos etiquetas del idioma, que es el equivalente de
+// listing.IsSpanishLanguage.
 //
 // Devuelve cuántos listings quedaron con el precio nuevo.
-func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *catalog.Price) (int64, error) {
+func repriceListings(ctx context.Context, tx pgx.Tx, gameCode string, variantID int64, price *catalog.Price) (int64, error) {
+	discounted := listing.IsDiscountedLanguage(gameCode, "Español")
 	spanishUSD := listing.SpanishPriceUSD(price.MarketUSD)
 	spanishCOP := listing.StandardizedPriceCOP(spanishUSD, price.TRMUsed)
 	tag, err := tx.Exec(ctx, `
 		UPDATE inventory_listings
 		SET
-			price_usd = CASE WHEN language IN ('Spanish', 'Español') THEN $4::numeric ELSE $2::numeric END,
-			price_cop = CASE WHEN language IN ('Spanish', 'Español') THEN $5::numeric ELSE $3::numeric END,
+			price_usd = CASE WHEN $6 AND language IN ('Spanish', 'Español') THEN $4::numeric ELSE $2::numeric END,
+			price_cop = CASE WHEN $6 AND language IN ('Spanish', 'Español') THEN $5::numeric ELSE $3::numeric END,
 			updated_at = now()
 		WHERE variant_id = $1
-	`, variantID, price.MarketUSD, price.MarketCOP, spanishUSD, spanishCOP)
+	`, variantID, price.MarketUSD, price.MarketCOP, spanishUSD, spanishCOP, discounted)
 	if err != nil {
 		return 0, err
 	}

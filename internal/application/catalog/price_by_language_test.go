@@ -1,12 +1,15 @@
 package catalog
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
+	"trample-back/internal/ports/out"
 )
 
 // testTRM es la TRM con la que se construyen las cartas del fixture. Sus valores
@@ -14,17 +17,41 @@ import (
 // no valide un COP que el código real nunca produciría.
 const testTRM = 3309.0
 
-// mw es una impresión de Mew ex tal como la devuelve hoy Scrydex. El caso que
-// motivó este código es real: "Mew ex" tiene 32 impresiones y la búsqueda por
-// nombre devuelve me55-66 (US$4.93) en lugar de me55-158 (US$90.34), que es la
-// que el staff tiene en inventario.
-func mw(id, expansion, number, rarity string, marketUSD float64) catalog.Card {
+// fakeFetchScrydex devuelve una única impresión, como hace Scrydex al pedir una
+// carta por ID.
+type fakeFetchScrydex struct {
+	out.ScrydexClient
+	card *catalog.Card
+	err  error
+	// asks cuenta las consultas y guarda el ID pedido, para comprobar que la
+	// impresión se resuelve por identidad y no por nombre.
+	asks    int
+	askedID string
+}
+
+func (f *fakeFetchScrydex) FetchCard(_ context.Context, _, externalID string, _ []string) (*catalog.Card, error) {
+	f.asks++
+	f.askedID = externalID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.card, nil
+}
+
+func (f *fakeFetchScrydex) FetchExpansions(context.Context, string) ([]catalog.Expansion, error) {
+	return nil, nil
+}
+
+// mewCard es una impresión de Mew ex tal como la devuelve hoy Scrydex: 90,34 USD
+// de precio de mercado.
+func mewCard() catalog.Card {
+	const marketUSD = 90.34
 	return catalog.Card{
-		ExternalID: id,
+		ExternalID: "me55-158",
 		Name:       "Mew ex",
-		Number:     number,
-		Rarity:     rarity,
-		Expansion:  catalog.Expansion{ExternalID: expansion, Name: "30th Celebration"},
+		Number:     "158",
+		Rarity:     "Futuristic Rare",
+		Expansion:  catalog.Expansion{ExternalID: "me55", Name: "30th Celebration"},
 		Variants: []catalog.Variant{{
 			Name: "holofoil",
 			NMPrice: &catalog.Price{
@@ -38,127 +65,144 @@ func mw(id, expansion, number, rarity string, marketUSD float64) catalog.Card {
 	}
 }
 
-func TestMatchPrintingEligeLaImpresionCorrecta(t *testing.T) {
-	// Devueltas en el orden en que Scrydex las lista para `name:"Mew ex"`.
-	candidates := []catalog.Card{
-		mw("me55-66", "me55", "66", "Double Rare", 4.93),
-		mw("me55-152", "me55", "152", "Special Illustration Rare", 153.14),
-		mw("me55-158", "me55", "158", "Futuristic Rare", 90.34),
-	}
-	ref := identityOf(mw("me55-158", "me55", "158", "Futuristic Rare", 90.34))
-
-	got, ok := matchPrinting(ref, candidates)
-	if !ok {
-		t.Fatal("matchPrinting no encontró coincidencia")
-	}
-	if got.ExternalID != "me55-158" {
-		t.Fatalf("eligió %s (US$%.2f), se esperaba me55-158", got.ExternalID, got.Variants[0].NMPrice.MarketUSD)
-	}
+func newPriceByLanguage(card catalog.Card) (*PriceByLanguageUseCase, *fakeFetchScrydex) {
+	scrydex := &fakeFetchScrydex{card: &card}
+	return NewPriceByLanguageUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: testTRM})), scrydex
 }
 
-func TestMatchPrintingNoAdivinaCuandoNoHayCoincidencia(t *testing.T) {
-	// Sin coincidencia debe fallar en vez de devolver el primer resultado: ese
-	// es exactamente el bug que escribía el precio de otra carta en el listing.
-	candidates := []catalog.Card{
-		mw("me55-66", "me55", "66", "Double Rare", 4.93),
-		mw("sv4pt5-216", "sv4pt5", "216", "Shiny Ultra Rare", 32.78),
-	}
-	ref := identityOf(mw("me55-158", "me55", "158", "Futuristic Rare", 90.34))
-
-	if got, ok := matchPrinting(ref, candidates); ok {
-		t.Fatalf("matchPrinting devolvió %s, se esperaba que no hubiera coincidencia", got.ExternalID)
-	}
-}
-
-func TestMatchPrintingEmparejaElEquivalenteJaponés(t *testing.T) {
-	// Par real de Scrydex: la misma impresión de Charizard ex en inglés y en
-	// japonés. Scrydex le da otro ID y otra expansión (sv3 → sv3_ja), y además
-	// cambia la rareza ("Double Rare" → "スーパーレア", RR → SR), así que el
-	// emparejamiento tiene que apoyarse en la expansión y el número.
-	en := catalog.Card{
-		ExternalID: "sv3-125", Name: "Charizard ex", Number: "125",
-		Rarity: "Double Rare", RarityCode: "RR",
-		Expansion: catalog.Expansion{ExternalID: "sv3", Name: "Scarlet & Violet"},
-	}
-	ja := catalog.Card{
-		ExternalID: "sv3_ja-125", Name: "Charizard ex", Number: "125",
-		Rarity: "スーパーレア", RarityCode: "SR",
-		Expansion: catalog.Expansion{ExternalID: "sv3_ja", Name: "Scarlet & Violet"},
-	}
-	// Otro candidato equivocado, con el mismo nombre y otro set.
-	other := catalog.Card{
-		ExternalID: "sv4a_ja-76", Name: "Charizard ex", Number: "76",
-		Rarity: "ダブルレア", Expansion: catalog.Expansion{ExternalID: "sv4a_ja"},
+// TestExecuteSoloDescuentaElEspanolDePokemon recorre la regla completa: el único
+// idioma con precio propio es el español de Pokémon. Cualquier otro idioma, en
+// cualquier juego, devuelve el precio de mercado tal cual.
+func TestExecuteSoloDescuentaElEspanolDePokemon(t *testing.T) {
+	cases := []struct {
+		game     string
+		language string
+		discount bool
+	}{
+		{"pokemon", "Español", true},
+		{"pokemon", "Spanish", true},
+		// El resto de los idiomas de Pokémon va al precio de mercado.
+		{"pokemon", "Japonés", false},
+		{"pokemon", "Inglés", false},
+		{"pokemon", "Coreano", false},
+		// Y el español de otros juegos también: el descuento es de Pokémon.
+		{"mtg", "Español", false},
+		{"mtg", "Spanish", false},
+		{"mtg", "French", false},
+		{"riftbound", "Español", false},
+		// Sin idioma tampoco hay descuento.
+		{"pokemon", "", false},
 	}
 
-	got, ok := matchPrinting(identityOf(en), []catalog.Card{other, ja})
-	if !ok {
-		t.Fatal("matchPrinting no encontró el equivalente japonés")
-	}
-	if got.ExternalID != "sv3_ja-125" {
-		t.Fatalf("eligió %s, se esperaba sv3_ja-125", got.ExternalID)
-	}
-}
-
-func TestBaseExpansionID(t *testing.T) {
-	for input, want := range map[string]string{
-		"sv3":       "sv3",
-		"sv3_ja":    "sv3",
-		"m6a_ja":    "m6a",
-		"sv4pt5_zh": "sv4pt5",
-		"me55":      "me55",
-		// Sin sufijo de idioma reconocible se devuelve tal cual.
-		"cel25c": "cel25c",
-		// El sufijo solo se quita al final: un ID que lo contenga en medio no se
-		// toca.
-		"ja_set": "ja_set",
-	} {
-		if got := baseExpansionID(input); got != want {
-			t.Fatalf("baseExpansionID(%q) = %q, want %q", input, got, want)
+	for _, c := range cases {
+		uc, _ := newPriceByLanguage(mewCard())
+		got, err := uc.Execute(t.Context(), PriceByLanguageInput{
+			GameCode:   c.game,
+			ExternalID: "me55-158",
+			Name:       "Mew ex",
+			Language:   c.language,
+		})
+		if err != nil {
+			t.Fatalf("%s/%s: %v", c.game, c.language, err)
+		}
+		p := got.Variants[0].NMPrice
+		want := 90.34
+		if c.discount {
+			want = listing.SpanishPriceUSD(90.34)
+		}
+		if p.MarketUSD != want {
+			t.Errorf("%s/%s: MarketUSD = %v, want %v", c.game, c.language, p.MarketUSD, want)
+		}
+		// El COP siempre tiene que ser derivable del USD: si el precio de venta
+		// se anunciara con un COP que no sale de la regla, el catálogo y el
+		// re-preciado mostrarían precios distintos para la misma carta.
+		if wantCOP := int64(listing.StandardizedPriceCOP(p.MarketUSD, testTRM)); p.MarketCOP != wantCOP {
+			t.Errorf("%s/%s: MarketCOP = %v, want %v", c.game, c.language, p.MarketCOP, wantCOP)
 		}
 	}
 }
 
-func TestMatchPrintingPrefiereElIDExacto(t *testing.T) {
-	// Un candidato con el mismo número y expansión pero otro ID no debe ganarle
-	// al que coincide exactamente.
-	candidates := []catalog.Card{
-		mw("otro-158", "me55", "158", "Futuristic Rare", 999),
-		mw("me55-158", "me55", "158", "Futuristic Rare", 90.34),
-	}
-	ref := identityOf(mw("me55-158", "me55", "158", "Futuristic Rare", 90.34))
+// TestExecuteResuelveLaImpresionPorID comprueba que el precio siempre viene de la
+// impresión pedida y nunca del primer resultado de una búsqueda por nombre: "Mew
+// ex" tiene 32 impresiones, de US$1 a US$15.000.
+func TestExecuteResuelveLaImpresionPorID(t *testing.T) {
+	uc, scrydex := newPriceByLanguage(mewCard())
 
-	got, ok := matchPrinting(ref, candidates)
-	if !ok {
-		t.Fatal("matchPrinting no encontró coincidencia")
+	if _, err := uc.Execute(t.Context(), PriceByLanguageInput{
+		GameCode:   "pokemon",
+		ExternalID: "me55-158",
+		Name:       "Mew ex",
+		Language:   "Japonés",
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if got.ExternalID != "me55-158" {
-		t.Fatalf("eligió %s, se esperaba me55-158", got.ExternalID)
+	if scrydex.asks != 1 {
+		t.Fatalf("consultó Scrydex %d veces, want 1", scrydex.asks)
+	}
+	if scrydex.askedID != "me55-158" {
+		t.Fatalf("pidió la impresión %q, want me55-158", scrydex.askedID)
 	}
 }
 
-func TestMatchPrintingSinCandidatos(t *testing.T) {
-	ref := identityOf(mw("me55-158", "me55", "158", "Futuristic Rare", 90.34))
-	if _, ok := matchPrinting(ref, nil); ok {
-		t.Fatal("matchPrinting no debe encontrar coincidencia sin candidatos")
+// TestExecuteNoFallaPorIdiomaSinTraduccion es el caso que reportaba el panel: una
+// impresión japonesa no existente en el índice japonés igual devuelve precio, en
+// vez del "no disponible en ese idioma" que obligaba a dejarlo a mano.
+func TestExecuteNoFallaPorIdiomaSinTraduccion(t *testing.T) {
+	uc, _ := newPriceByLanguage(mewCard())
+
+	got, err := uc.Execute(t.Context(), PriceByLanguageInput{
+		GameCode:   "pokemon",
+		ExternalID: "me55-158",
+		Language:   "Japonés",
+	})
+	if err != nil {
+		t.Fatalf("un idioma sin precio propio no debe dar error: %v", err)
+	}
+	if got.Variants[0].NMPrice.MarketUSD != 90.34 {
+		t.Fatalf("MarketUSD = %v, want 90.34", got.Variants[0].NMPrice.MarketUSD)
 	}
 }
 
-func TestNormalizeNumber(t *testing.T) {
-	for input, want := range map[string]string{
-		"158":   "158",
-		" 158":  "158",
-		"#158":  "158",
-		" #158": "158",
-	} {
-		if got := normalizeNumber(input); got != want {
-			t.Fatalf("normalizeNumber(%q) = %q, want %q", input, got, want)
-		}
+func TestExecuteSinExternalIDNoConsulta(t *testing.T) {
+	// Sin external_id no hay forma de saber qué impresión se pidió, así que no
+	// se debe llamar a Scrydex ni devolver el primer resultado por nombre.
+	uc := NewPriceByLanguageUseCase(nil)
+
+	_, err := uc.Execute(t.Context(), PriceByLanguageInput{
+		GameCode: "pokemon",
+		Name:     "Mew ex",
+		Language: "Español",
+	})
+	if err == nil {
+		t.Fatal("se esperaba error sin external_id")
+	}
+	if errors.Is(err, ErrNotAvailableInLanguage) {
+		t.Fatalf("el error debería ser de validación, no de disponibilidad: %v", err)
 	}
 }
 
+func TestExecutePropagaElFalloDeScrydex(t *testing.T) {
+	scrydex := &fakeFetchScrydex{err: fmt.Errorf("HTTP 500")}
+	uc := NewPriceByLanguageUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: testTRM}))
+
+	_, err := uc.Execute(t.Context(), PriceByLanguageInput{
+		GameCode:   "pokemon",
+		ExternalID: "me55-158",
+		Name:       "Mew ex",
+		Language:   "Español",
+	})
+	if !errors.Is(err, ErrNotAvailableInLanguage) {
+		t.Fatalf("el error debe ser inspeccionable para mapearlo a 400: %v", err)
+	}
+	if !errors.Is(err, scrydex.err) {
+		t.Fatalf("debe conservar la causa de Scrydex: %v", err)
+	}
+}
+
+// TestApplySpanishPrice verifica el cálculo del descuento y que no se filtre a la
+// carta cacheada.
 func TestApplySpanishPrice(t *testing.T) {
-	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
+	card := mewCard()
 	card.Variants = append(card.Variants, catalog.Variant{Name: "normal", NMPrice: nil})
 
 	got := applySpanishPrice(card)
@@ -187,8 +231,7 @@ func TestApplySpanishPrice(t *testing.T) {
 	}
 	// La copia debe ser real: si compartiera el arreglo de variantes o el
 	// puntero del precio, el descuento se escribiría también sobre la carta
-	// cacheada por SearchScrydex y dos consultas en español acumularían el
-	// factor (×0.8, ×0.64…).
+	// cacheada por SearchScrydex.
 	if card.Variants[0].NMPrice.MarketUSD != 90.34 {
 		t.Fatalf("el original quedó en %v, want 90.34", card.Variants[0].NMPrice.MarketUSD)
 	}
@@ -199,29 +242,11 @@ func TestApplySpanishPrice(t *testing.T) {
 	}
 }
 
-// TestApplySpanishPriceRespetaLaReglaDeMercado ata este endpoint con la regla que
-// aplica el resto del sistema: repriceListings escribe en inventory_listings el
-// COP que sale de SpanishPriceUSD + StandardizedPriceCOP. Si el endpoint devolviera
-// otro valor, el catálogo anunciaría un precio que ninguna compra_realiza.
-func TestApplySpanishPriceRespetaLaReglaDeMercado(t *testing.T) {
-	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
-	got := applySpanishPrice(card).Variants[0].NMPrice
-
-	wantUSD := listing.SpanishPriceUSD(90.34)
-	if got.MarketUSD != wantUSD {
-		t.Fatalf("MarketUSD = %v, want %v", got.MarketUSD, wantUSD)
-	}
-	wantCOP := int64(listing.StandardizedPriceCOP(wantUSD, testTRM))
-	if got.MarketCOP != wantCOP {
-		t.Fatalf("MarketCOP = %v, want %v", got.MarketCOP, wantCOP)
-	}
-}
-
 // TestApplySpanishPriceSinPrecioBajo comprueba que un "precio bajo" inexistente no
 // se inventa: pasarlo por StandardizedPriceCOP devolvería el mínimo fijo de 2.000
 // y el catálogo publicaría un precio que Scrydex nunca dio.
 func TestApplySpanishPriceSinPrecioBajo(t *testing.T) {
-	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
+	card := mewCard()
 	card.Variants[0].NMPrice.LowUSD = 0
 	card.Variants[0].NMPrice.LowCOP = 0
 
@@ -250,50 +275,11 @@ func TestIsSpanishLanguage(t *testing.T) {
 	}
 }
 
-func TestLanguageNameToCode(t *testing.T) {
-	for name, want := range map[string]string{
-		"Japanese":            "JA",
-		"English":             "EN",
-		"Korean":              "KO",
-		"Chinese Simplified":  "ZH-CN",
-		"Chinese Traditional": "ZH-TW",
-		// El español no es un idioma indexado: se resuelve sobre el inglés.
-		"Spanish": "",
-		"Español": "",
-		"":        "",
-	} {
-		if got := LanguageNameToCode(name); got != want {
-			t.Fatalf("LanguageNameToCode(%q) = %q, want %q", name, got, want)
-		}
-	}
-}
-
-func TestExecuteSinExternalIDNoConsulta(t *testing.T) {
-	// Sin external_id no hay forma de saber qué impresión se pidió, así que no
-	// se debe llamar a Scrydex ni devolver el primer resultado por nombre.
-	uc := NewPriceByLanguageUseCase(nil)
-
-	_, err := uc.Execute(t.Context(), PriceByLanguageInput{
-		GameCode: "pokemon",
-		Name:     "Mew ex",
-		Language: "Español",
-	})
-	if err == nil {
-		t.Fatal("se esperaba error sin external_id")
-	}
-	if errors.Is(err, ErrNotAvailableInLanguage) {
-		t.Fatalf("el error debería ser de validación, no de disponibilidad: %v", err)
-	}
-}
-
 func TestErroresSonInspeccionables(t *testing.T) {
-	// El handler mapea estos errores a 400 para que el front conserve el precio
-	// que ya tenía, así que deben seguir siendo identificables con errors.Is.
+	// El handler mapea este error a 400 para que el front conserve el precio que
+	// ya tenía, así que debe seguir siendo identificable con errors.Is.
 	wrapped := errors.Join(ErrNotAvailableInLanguage, errors.New("scrydex: HTTP 500"))
 	if !errors.Is(wrapped, ErrNotAvailableInLanguage) {
 		t.Fatal("ErrNotAvailableInLanguage debe ser inspeccionable")
-	}
-	if !errors.Is(errors.Join(ErrUnknownLanguage, errors.New("x")), ErrUnknownLanguage) {
-		t.Fatal("ErrUnknownLanguage debe ser inspeccionable")
 	}
 }

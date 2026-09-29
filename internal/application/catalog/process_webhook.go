@@ -233,8 +233,12 @@ func (uc *ProcessWebhookUseCase) logPriceUpdate(eventID, gameCode, expansionID s
 		slog.String("variante", u.VariantName),
 		slog.Float64("precio_nuevo_usd", u.NewUSD),
 		slog.Int64("precio_nuevo_cop", u.NewCOP),
-		slog.Float64("precio_espanol_usd", listing.SpanishPriceUSD(u.NewUSD)),
 		slog.Int64("listings_actualizados", u.ListingsRepriced),
+	}
+	// Solo el español de Pokémon se publica con descuento; en el resto de los
+	// idiomas el precio de venta es el de mercado y este campo no aplicaría.
+	if listing.IsDiscountedLanguage(gameCode, "Español") {
+		attrs = append(attrs, slog.Float64("precio_espanol_usd", listing.SpanishPriceUSD(u.NewUSD)))
 	}
 	if u.HadPrice {
 		attrs = append(attrs, slog.Float64("precio_anterior_usd", u.OldUSD))

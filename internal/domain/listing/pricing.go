@@ -28,10 +28,10 @@ func StandardizedPriceCOP(priceUSD, trm float64) float64 {
 // cartas en español. Scrydex no indexa cartas en español, así que su precio
 // siempre se deriva del de la versión en inglés.
 //
-// Es la misma regla que aplica el re-preciado de listings al refrescar precios
-// desde Scrydex (ver repriceListings en card_repository_pg.go) y la que usa el
-// endpoint de precio por idioma (PriceByLanguageUseCase), así que vive acá para
-// que ambas rutas no se desincronicen.
+// El descuento es solo de Pokémon, y solo del español: es la única combinación
+// en la que el precio Published difiere del de mercado. Cualquier otro idioma,
+// en cualquier juego, se publica al precio de mercado de la impresión, que es el
+// que el webhook de precios mantiene al día. Ver IsDiscountedLanguage.
 const SpanishPriceFactor = 0.80
 
 // SpanishPriceUSD es el precio en USD de la carta en español a partir del precio
@@ -51,4 +51,19 @@ func SpanishPriceUSD(englishUSD float64) float64 {
 // etiquetas o una carta quedaría a un precio y la otra al descontado.
 func IsSpanishLanguage(name string) bool {
 	return name == "Spanish" || name == "Español"
+}
+
+// IsDiscountedLanguage indica si un listing en ese idioma se publica al precio
+// descontado en vez de al de mercado. Hoy la única combinación que lo hace es
+// Pokémon en español.
+//
+// Es la fuente única de esa regla. La consultan el re-preciado de listings al
+// refrescar precios, el endpoint de precio por idioma y los avisos al staff, y
+// todas tienen que coincidir: si una discounted y otra no, la misma carta
+// aparecería a dos precios distintos según por dónde se mire.
+//
+// El idioma no se busca en Scrydex para nada más: el de cualquier otra impresión
+// es el de mercado de esa impresión, que es el mismo que trae el webhook.
+func IsDiscountedLanguage(gameCode, language string) bool {
+	return gameCode == "pokemon" && IsSpanishLanguage(language)
 }

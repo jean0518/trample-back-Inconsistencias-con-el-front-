@@ -28,6 +28,40 @@ func TestStandardizedPriceCOP(t *testing.T) {
 	}
 }
 
+// TestIsDiscountedLanguage fija la regla de negocio: el único idioma con precio
+// propio es el español de Pokémon. Es la fuente única de esa decisión, así que
+// este test es el que avisa si alguna de las rutas que lo consultan —el re-preciado
+// de listings, el precio por idioma y los avisos al staff— se separa del resto.
+func TestIsDiscountedLanguage(t *testing.T) {
+	for _, c := range []struct{ game, language string }{
+		{"pokemon", "Español"},
+		{"pokemon", "Spanish"},
+	} {
+		if !IsDiscountedLanguage(c.game, c.language) {
+			t.Errorf("IsDiscountedLanguage(%q, %q) = false, want true", c.game, c.language)
+		}
+	}
+
+	sinDescuento := []struct{ game, language string }{
+		// El español de los otros juegos va al precio de mercado.
+		{"mtg", "Español"},
+		{"mtg", "Spanish"},
+		{"riftbound", "Español"},
+		// Y ningún otro idioma de Pokémon.
+		{"pokemon", "Inglés"},
+		{"pokemon", "Japonés"},
+		{"pokemon", "Coreano"},
+		{"pokemon", "Chinese Simplified"},
+		{"pokemon", ""},
+		{"", "Español"},
+	}
+	for _, c := range sinDescuento {
+		if IsDiscountedLanguage(c.game, c.language) {
+			t.Errorf("IsDiscountedLanguage(%q, %q) = true, want false", c.game, c.language)
+		}
+	}
+}
+
 // El precio en español sale del 80 % del USD en inglés, y el COP se calcula
 // desde ese USD con la regla normal, no descontando el COP ya redondeado.
 func TestPrecioEspanolDesdeIngles(t *testing.T) {

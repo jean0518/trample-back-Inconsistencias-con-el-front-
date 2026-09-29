@@ -78,7 +78,7 @@ func buildMessages(report catalog.PriceReport) []string {
 		entries = append(entries, fmt.Sprintf("💰 <b>Precios actualizados · %s</b>\n%d %s de tu inventario\n",
 			html.EscapeString(game), len(report.Changes), plural(len(report.Changes), "variante", "variantes")))
 		for _, c := range report.Changes {
-			entries = append(entries, formatChange(c))
+			entries = append(entries, formatChange(report.GameCode, c))
 		}
 	} else {
 		entries = append(entries, fmt.Sprintf("📭 <b>Evento de precios · %s</b>\nNingún precio de tu inventario cambió.\n",
@@ -130,18 +130,24 @@ func capitalize(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-func formatChange(c catalog.CardPriceChange) string {
+func formatChange(gameCode string, c catalog.CardPriceChange) string {
 	u := c.Update
 	old := "sin precio"
 	if u.HadPrice {
 		old = formatUSD(u.OldUSD)
 	}
-	return fmt.Sprintf("\n• <b>%s</b> (%s) · %s\n  %s → %s · %s COP\n  Español: %s · %d %s\n",
+	// Solo el español de Pokémon se publica al 80 %; en cualquier otro idioma el
+	// precio de venta es el de mercado, así que la línea sería engañosa.
+	spanish := ""
+	if listing.IsDiscountedLanguage(gameCode, "Español") {
+		spanish = fmt.Sprintf("\n  Español: %s", formatUSD(listing.SpanishPriceUSD(u.NewUSD)))
+	}
+	return fmt.Sprintf("\n• <b>%s</b> (%s) · %s\n  %s → %s · %s COP%s\n  %d %s\n",
 		html.EscapeString(c.CardName),
 		html.EscapeString(c.ExpansionID),
 		html.EscapeString(u.VariantName),
 		old, formatUSD(u.NewUSD), formatCOP(u.NewCOP),
-		formatUSD(listing.SpanishPriceUSD(u.NewUSD)),
+		spanish,
 		u.ListingsRepriced, plural(int(u.ListingsRepriced), "listing", "listings"),
 	)
 }

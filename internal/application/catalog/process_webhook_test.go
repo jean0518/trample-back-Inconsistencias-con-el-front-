@@ -11,8 +11,11 @@ import (
 // fakeWebhookScrydex devuelve un set completo de cartas, como hace Scrydex en los
 // eventos de precio.
 type fakeWebhookScrydex struct {
-	cards   []catalog.Card
-	fetches int
+	cards      []catalog.Card
+	fetches    int
+	expansions []catalog.Expansion
+	// listas cuenta las veces que se pidió la lista de expansiones.
+	listas int
 }
 
 func (f *fakeWebhookScrydex) SearchCards(context.Context, out.SearchParams) ([]catalog.Card, error) {
@@ -22,7 +25,8 @@ func (f *fakeWebhookScrydex) FetchCard(context.Context, string, string, []string
 	return nil, nil
 }
 func (f *fakeWebhookScrydex) FetchExpansions(context.Context, string) ([]catalog.Expansion, error) {
-	return nil, nil
+	f.listas++
+	return f.expansions, nil
 }
 func (f *fakeWebhookScrydex) FetchExpansionCards(context.Context, string, string) ([]catalog.Card, error) {
 	f.fetches++
@@ -38,6 +42,15 @@ type fakePriceRefresher struct {
 
 func (f *fakePriceRefresher) ListedExternalIDs(context.Context, string, string) (map[string]bool, error) {
 	return f.existentes, nil
+}
+
+// Las expansiones que existen en la base para los tests; el resto se reporta
+// como "no está en la base".
+func (f *fakePriceRefresher) FindExpansionName(_ context.Context, _ string, id string) (string, bool, error) {
+	if id == "base-2" {
+		return "Base Set 2", true, nil
+	}
+	return "", false, nil
 }
 
 func (f *fakePriceRefresher) RefreshCardPrices(_ context.Context, _ string, card catalog.Card) ([]catalog.PriceUpdate, error) {
@@ -109,11 +122,13 @@ func TestExecuteSaltaExpansionesSinListing(t *testing.T) {
 type fakeNotifier struct {
 	llamadas int
 	cambios  []catalog.CardPriceChange
+	saltadas []catalog.SkippedExpansion
 }
 
-func (f *fakeNotifier) NotifyPriceUpdates(_ context.Context, _ string, changes []catalog.CardPriceChange) error {
+func (f *fakeNotifier) NotifyPriceReport(_ context.Context, report catalog.PriceReport) error {
 	f.llamadas++
-	f.cambios = append(f.cambios, changes...)
+	f.cambios = append(f.cambios, report.Changes...)
+	f.saltadas = append(f.saltadas, report.Skipped...)
 	return nil
 }
 
@@ -151,5 +166,45 @@ func TestExecuteNotificaSoloCambiosReales(t *testing.T) {
 	}
 	if notifier.llamadas != 0 {
 		t.Fatalf("no se esperaba aviso si el precio no cambió, hubo %d", notifier.llamadas)
+	}
+}
+
+// Las expansiones sin listings se reportan con el motivo: no existe en la base
+// o existe pero no tiene stock.
+func TestExecuteReportaExpansionesSaltadasConMotivo(t *testing.T) {
+	scrydex := &fakeWebhookScrydex{expansions: []catalog.Expansion{{ExternalID: "base-1", Name: "Base Set"}}}
+	repo := &fakePriceRefresher{existentes: map[string]bool{}}
+	notifier := &fakeNotifier{}
+
+	uc := NewProcessWebhookUseCase(NewSearchScrydex(scrydex, fakeTRM{rate: 4000}), repo, notifier, nil)
+	event := WebhookEvent{
+		ID:   "evt_4",
+		Name: "pokemon.expansions.prices.raw_updated",
+		Data: WebhookEventData{ExpansionIDs: []string{"base-1", "base-2"}},
+	}
+	if err := uc.Execute(context.Background(), event); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if notifier.llamadas != 1 || len(notifier.saltadas) != 2 {
+		t.Fatalf("se esperaba un aviso con 2 expansiones saltadas: %d avisos, %+v", notifier.llamadas, notifier.saltadas)
+	}
+	want := []catalog.SkippedExpansion{
+		// No está en la base: el nombre sale de la lista de Scrydex.
+		{ID: "base-1", Name: "Base Set", Reason: catalog.SkipNotInDB},
+		{ID: "base-2", Name: "Base Set 2", Reason: catalog.SkipNoStock},
+	}
+	for i, w := range want {
+		if notifier.saltadas[i] != w {
+			t.Errorf("saltada %d = %+v, want %+v", i, notifier.saltadas[i], w)
+		}
+	}
+
+	// La lista de nombres se guarda en memoria: un segundo evento no vuelve a
+	// pedirla a Scrydex.
+	if err := uc.Execute(context.Background(), event); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if scrydex.listas != 1 {
+		t.Fatalf("la lista de expansiones se pidió %d veces, se esperaba 1", scrydex.listas)
 	}
 }

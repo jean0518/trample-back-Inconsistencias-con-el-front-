@@ -163,3 +163,33 @@ type CardPriceChange struct {
 func (c CardPriceChange) Changed() bool {
 	return !c.Update.HadPrice || c.Update.OldUSD != c.Update.NewUSD
 }
+
+// Motivos por los que una expansión de un evento de Scrydex no se procesó.
+const (
+	SkipNotInDB      = "no está en la base"
+	SkipNoStock      = "sin listings activos con stock"
+	SkipScrydexError = "error al consultar Scrydex"
+	SkipDBError      = "error al consultar la base"
+)
+
+// SkippedExpansion es una expansión que llegó en un evento de Scrydex y no se
+// procesó. Name viene vacío si no se pudo averiguar el nombre.
+type SkippedExpansion struct {
+	ID     string
+	Name   string
+	Reason string
+}
+
+// PriceReport resume un evento de precios de Scrydex para avisarle al staff:
+// qué precios del inventario cambiaron y qué expansiones no se procesaron.
+type PriceReport struct {
+	GameCode string
+	EventID  string
+	Changes  []CardPriceChange
+	Skipped  []SkippedExpansion
+}
+
+// IsEmpty indica si no hay nada que contar.
+func (r PriceReport) IsEmpty() bool {
+	return len(r.Changes) == 0 && len(r.Skipped) == 0
+}

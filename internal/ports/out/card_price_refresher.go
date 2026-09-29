@@ -26,6 +26,10 @@ type CardPriceRefresher interface {
 	// gastar la llamada, y si tiene, solo esas cartas se refrescan.
 	ListedExternalIDs(ctx context.Context, gameCode, expansionExternalID string) (map[string]bool, error)
 
+	// FindExpansionName devuelve el nombre de la expansión si existe en la base.
+	// El webhook lo usa para explicar por qué se saltó una expansión.
+	FindExpansionName(ctx context.Context, gameCode, expansionExternalID string) (name string, found bool, err error)
+
 	// RefreshCardPrices actualiza el precio de mercado de las variantes de la
 	// carta que ya existen y devuelve un PriceUpdate por cada variante que
 	// actualizó. Si la carta o la variante no están en la base no inserta nada

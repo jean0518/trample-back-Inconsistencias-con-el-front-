@@ -50,14 +50,22 @@ type ProcessWebhookUseCase struct {
 	repo   out.CardPriceRefresher
 	// notifier es opcional: sin él los cambios solo quedan en los logs.
 	notifier out.PriceUpdateNotifier
-	log      *slog.Logger
+	// names da el nombre de las expansiones que no están en la base.
+	names *expansionNames
+	log   *slog.Logger
 }
 
 func NewProcessWebhookUseCase(search *SearchScrydex, repo out.CardPriceRefresher, notifier out.PriceUpdateNotifier, log *slog.Logger) *ProcessWebhookUseCase {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &ProcessWebhookUseCase{search: search, repo: repo, notifier: notifier, log: log}
+	return &ProcessWebhookUseCase{
+		search:   search,
+		repo:     repo,
+		notifier: notifier,
+		names:    newExpansionNames(search.scrydex),
+		log:      log,
+	}
 }
 
 func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent) error {
@@ -72,42 +80,33 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 		slog.Int("expansions", len(event.Data.ExpansionIDs)),
 	)
 
+	report := catalog.PriceReport{GameCode: gameCode, EventID: event.ID}
 	var firstErr error
-	refreshed, skipped, skippedExpansions := 0, 0, 0
-	var changes []catalog.CardPriceChange
+	fail := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	refreshed, skipped := 0, 0
+
 	for _, expansionID := range event.Data.ExpansionIDs {
 		// Primero se mira qué hay listado de la expansión: Scrydex avisa por set
 		// completo y la mayoría de sets no tienen nada en el inventario.
 		listed, err := uc.repo.ListedExternalIDs(ctx, gameCode, expansionID)
 		if err != nil {
-			uc.log.Warn("webhook: no se pudo consultar el inventario de la expansión",
-				slog.String("expansion_id", expansionID),
-				slog.Any("error", err),
-			)
-			if firstErr == nil {
-				firstErr = err
-			}
+			uc.skipExpansion(&report, catalog.SkippedExpansion{ID: expansionID, Reason: catalog.SkipDBError}, err)
+			fail(err)
 			continue
 		}
 		if len(listed) == 0 {
-			skippedExpansions++
-			uc.log.Info("webhook: expansión sin listings activos, se salta",
-				slog.String("event_id", event.ID),
-				slog.String("game_code", gameCode),
-				slog.String("expansion_id", expansionID),
-			)
+			uc.skipExpansion(&report, uc.whyNoListings(ctx, gameCode, expansionID), nil)
 			continue
 		}
 
 		cards, err := uc.search.FetchExpansionCards(ctx, gameCode, expansionID)
 		if err != nil {
-			uc.log.Warn("webhook: no se pudo obtener expansión",
-				slog.String("expansion_id", expansionID),
-				slog.Any("error", err),
-			)
-			if firstErr == nil {
-				firstErr = err
-			}
+			uc.skipExpansion(&report, catalog.SkippedExpansion{ID: expansionID, Reason: catalog.SkipScrydexError}, err)
+			fail(err)
 			continue
 		}
 
@@ -130,9 +129,7 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 					slog.String("external_id", card.ExternalID),
 					slog.Any("error", err),
 				)
-				if firstErr == nil {
-					firstErr = err
-				}
+				fail(err)
 				continue
 			}
 			if len(updates) == 0 {
@@ -149,7 +146,7 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 					Update:      u,
 				}
 				if change.Changed() {
-					changes = append(changes, change)
+					report.Changes = append(report.Changes, change)
 				}
 			}
 		}
@@ -159,14 +156,12 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 		slog.String("event_name", event.Name),
 		slog.Int("cartas_actualizadas", refreshed),
 		slog.Int("cartas_ignoradas_sin_listing", skipped),
-		slog.Int("expansiones_sin_listing", skippedExpansions),
-		slog.Int("variantes_con_precio_distinto", len(changes)),
+		slog.Int("expansiones_no_procesadas", len(report.Skipped)),
+		slog.Int("variantes_con_precio_distinto", len(report.Changes)),
 	)
 
-	// Solo se avisa si algún precio cambió de verdad: Scrydex manda el set
-	// completo y la mayoría de eventos no mueven nada del inventario.
-	if uc.notifier != nil && len(changes) > 0 {
-		if err := uc.notifier.NotifyPriceUpdates(ctx, gameCode, changes); err != nil {
+	if uc.notifier != nil && !report.IsEmpty() {
+		if err := uc.notifier.NotifyPriceReport(ctx, report); err != nil {
 			uc.log.Warn("webhook: no se pudo enviar el aviso de precios",
 				slog.String("event_id", event.ID),
 				slog.Any("error", err),
@@ -175,6 +170,55 @@ func (uc *ProcessWebhookUseCase) Execute(ctx context.Context, event WebhookEvent
 	}
 
 	return firstErr
+}
+
+// whyNoListings distingue una expansión que no existe en la base de una que
+// existe pero no tiene nada a la venta, que para el staff son cosas distintas:
+// la primera es un set que nunca se dio de alta, la segunda uno sin stock.
+//
+// El nombre sale de la base si la expansión existe y, si no, de la lista de
+// expansiones de Scrydex, para que el aviso diga "151" y no "sv3pt5".
+func (uc *ProcessWebhookUseCase) whyNoListings(ctx context.Context, gameCode, expansionID string) catalog.SkippedExpansion {
+	skip := catalog.SkippedExpansion{ID: expansionID}
+	name, found, err := uc.repo.FindExpansionName(ctx, gameCode, expansionID)
+	switch {
+	case err != nil:
+		// No se sabe si existe, pero seguro que no tiene listings: se informa
+		// como sin stock y se deja el error en el log.
+		uc.log.Warn("webhook: no se pudo consultar la expansión",
+			slog.String("expansion_id", expansionID),
+			slog.Any("error", err),
+		)
+		skip.Reason = catalog.SkipNoStock
+	case !found:
+		skip.Reason = catalog.SkipNotInDB
+		skip.Name = uc.names.Name(ctx, gameCode, expansionID)
+	default:
+		skip.Name = name
+		skip.Reason = catalog.SkipNoStock
+	}
+	return skip
+}
+
+// skipExpansion registra en el log una expansión que no se procesó y la suma al
+// reporte que se envía por Telegram.
+func (uc *ProcessWebhookUseCase) skipExpansion(report *catalog.PriceReport, skip catalog.SkippedExpansion, err error) {
+	report.Skipped = append(report.Skipped, skip)
+	attrs := []any{
+		slog.String("event_id", report.EventID),
+		slog.String("game_code", report.GameCode),
+		slog.String("expansion_id", skip.ID),
+		slog.String("motivo", skip.Reason),
+	}
+	if skip.Name != "" {
+		attrs = append(attrs, slog.String("expansion", skip.Name))
+	}
+	if err != nil {
+		attrs = append(attrs, slog.Any("error", err))
+		uc.log.Warn("webhook: expansión no procesada", attrs...)
+		return
+	}
+	uc.log.Info("webhook: expansión no procesada", attrs...)
 }
 
 // logPriceUpdate deja una línea por variante actualizada con el precio anterior

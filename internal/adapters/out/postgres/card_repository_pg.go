@@ -252,6 +252,24 @@ func (r *CardRepository) RefreshCardPrices(ctx context.Context, gameCode string,
 	return updates, nil
 }
 
+// FindExpansionName devuelve el nombre de la expansión si existe para el juego.
+func (r *CardRepository) FindExpansionName(ctx context.Context, gameCode, expansionExternalID string) (string, bool, error) {
+	var name string
+	err := r.db.QueryRow(ctx, `
+		SELECT e.name
+		FROM expansions e
+		JOIN games g ON g.id = e.game_id
+		WHERE g.code = $1 AND e.external_id = $2
+	`, gameCode, expansionExternalID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("buscar expansión %q: %w", expansionExternalID, err)
+	}
+	return name, true, nil
+}
+
 // ListedExternalIDs devuelve las cartas de la expansión con algún listing
 // activo y con stock.
 //

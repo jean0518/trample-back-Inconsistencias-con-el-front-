@@ -48,8 +48,8 @@ func NewNotifier(token, chatID string) out.PriceUpdateNotifier {
 	}
 }
 
-func (n *Notifier) NotifyPriceUpdates(ctx context.Context, gameCode string, changes []catalog.CardPriceChange) error {
-	for _, msg := range buildMessages(gameCode, changes) {
+func (n *Notifier) NotifyPriceReport(ctx context.Context, report catalog.PriceReport) error {
+	for _, msg := range buildMessages(report) {
 		if err := n.send(ctx, msg); err != nil {
 			return err
 		}
@@ -57,29 +57,77 @@ func (n *Notifier) NotifyPriceUpdates(ctx context.Context, gameCode string, chan
 	return nil
 }
 
+// skipOrder fija el orden en que se listan los motivos en el mensaje.
+var skipOrder = []string{
+	catalog.SkipNotInDB,
+	catalog.SkipNoStock,
+	catalog.SkipScrydexError,
+	catalog.SkipDBError,
+}
+
 // buildMessages arma el aviso y lo parte en varios mensajes si no cabe en uno.
-// Cada carta va entera en un solo mensaje.
-func buildMessages(gameCode string, changes []catalog.CardPriceChange) []string {
-	game := gameNames[gameCode]
+// Cada renglón va entero en un solo mensaje.
+func buildMessages(report catalog.PriceReport) []string {
+	game := gameNames[report.GameCode]
 	if game == "" {
-		game = gameCode
+		game = report.GameCode
 	}
-	header := fmt.Sprintf("💰 <b>Precios actualizados · %s</b>\n%d %s de tu inventario\n",
-		html.EscapeString(game), len(changes), plural(len(changes), "variante", "variantes"))
+
+	var entries []string
+	if len(report.Changes) > 0 {
+		entries = append(entries, fmt.Sprintf("💰 <b>Precios actualizados · %s</b>\n%d %s de tu inventario\n",
+			html.EscapeString(game), len(report.Changes), plural(len(report.Changes), "variante", "variantes")))
+		for _, c := range report.Changes {
+			entries = append(entries, formatChange(c))
+		}
+	} else {
+		entries = append(entries, fmt.Sprintf("📭 <b>Evento de precios · %s</b>\nNingún precio de tu inventario cambió.\n",
+			html.EscapeString(game)))
+	}
+
+	if len(report.Skipped) > 0 {
+		byReason := make(map[string][]catalog.SkippedExpansion)
+		for _, sk := range report.Skipped {
+			byReason[sk.Reason] = append(byReason[sk.Reason], sk)
+		}
+		entries = append(entries, fmt.Sprintf("\n⏭️ <b>Expansiones no procesadas (%d)</b>\n", len(report.Skipped)))
+		for _, reason := range skipOrder {
+			group := byReason[reason]
+			if len(group) == 0 {
+				continue
+			}
+			entries = append(entries, fmt.Sprintf("<i>%s (%d)</i>\n", html.EscapeString(capitalize(reason)), len(group)))
+			for _, sk := range group {
+				entries = append(entries, formatSkipped(sk))
+			}
+		}
+	}
 
 	var messages []string
 	var b strings.Builder
-	b.WriteString(header)
-	for _, c := range changes {
-		entry := formatChange(c)
-		if b.Len()+len(entry) > maxMessageLen {
+	for _, entry := range entries {
+		if b.Len() > 0 && b.Len()+len(entry) > maxMessageLen {
 			messages = append(messages, b.String())
 			b.Reset()
-			b.WriteString("💰 <b>Precios actualizados (cont.)</b>\n")
+			b.WriteString("<i>(continuación)</i>\n")
 		}
 		b.WriteString(entry)
 	}
 	return append(messages, b.String())
+}
+
+func formatSkipped(sk catalog.SkippedExpansion) string {
+	if sk.Name != "" {
+		return fmt.Sprintf("• %s (<code>%s</code>)\n", html.EscapeString(sk.Name), html.EscapeString(sk.ID))
+	}
+	return fmt.Sprintf("• <code>%s</code>\n", html.EscapeString(sk.ID))
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func formatChange(c catalog.CardPriceChange) string {

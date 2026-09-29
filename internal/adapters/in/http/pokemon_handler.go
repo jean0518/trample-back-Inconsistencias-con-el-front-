@@ -12,23 +12,26 @@ import (
 )
 
 type PokemonHandler struct {
-	search        *appCatalog.SearchScrydex
-	expansions    *appCatalog.SyncExpansionsUseCase
-	importCard    *appCatalog.ImportCardUseCase
-	importListing *appCatalog.ImportListingUseCase
+	search          *appCatalog.SearchScrydex
+	priceByLanguage *appCatalog.PriceByLanguageUseCase
+	expansions      *appCatalog.SyncExpansionsUseCase
+	importCard      *appCatalog.ImportCardUseCase
+	importListing   *appCatalog.ImportListingUseCase
 }
 
 func NewPokemonHandler(
 	search *appCatalog.SearchScrydex,
+	priceByLanguage *appCatalog.PriceByLanguageUseCase,
 	expansions *appCatalog.SyncExpansionsUseCase,
 	importCard *appCatalog.ImportCardUseCase,
 	importListing *appCatalog.ImportListingUseCase,
 ) *PokemonHandler {
 	return &PokemonHandler{
-		search:        search,
-		expansions:    expansions,
-		importCard:    importCard,
-		importListing: importListing,
+		search:          search,
+		priceByLanguage: priceByLanguage,
+		expansions:      expansions,
+		importCard:      importCard,
+		importListing:   importListing,
 	}
 }
 
@@ -75,20 +78,21 @@ func (h *PokemonHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PriceByLanguage busca el precio de una carta en un idioma específico.
-// El front lo usa al seleccionar un idioma distinto de inglés/español.
+// PriceByLanguage devuelve el precio de mercado de una carta en un idioma
+// concreto. El front lo usa al editar un listing para re-preciarlo.
 //
 //	@Summary      Precio de carta Pokémon por idioma
 //	@Tags         pokemon
 //	@Accept       json
 //	@Produce      json
-//	@Param        body  body      object{name=string,expansion_code=string,rarity=string,language=string,variants=[]string}  true  "Filtros con idioma"
+//	@Param        body  body  object{name=string,external_id=string,expansion_code=string,rarity=string,language=string,variants=[]string}  true  "Filtros con idioma"
 //	@Success      200   {object}  catalog.Card
 //	@Failure      400   {object}  object{error=string}
 //	@Router       /scrydex/pokemon/cards/price-by-language [post]
 func (h *PokemonHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
+		ExternalID    string   `json:"external_id"`
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Language      string   `json:"language"`
@@ -98,53 +102,30 @@ func (h *PokemonHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request)
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	if body.Name == "" || body.Language == "" {
-		Error(w, http.StatusBadRequest, "name y language son requeridos")
+	if body.Language == "" {
+		Error(w, http.StatusBadRequest, "language es requerido")
 		return
 	}
-	slog.Info("price-by-language pokemon", slog.String("name", body.Name), slog.String("language", body.Language))
+	slog.Info("price-by-language pokemon",
+		slog.String("name", body.Name),
+		slog.String("external_id", body.ExternalID),
+		slog.String("language", body.Language),
+	)
 
-	// Español: Scrydex no indexa cartas en español; se busca en inglés y se
-	// aplica el 80 % del precio de mercado.
-	if isSpanish(body.Language) {
-		result, err := h.search.Search(r.Context(), out.SearchParams{
-			GameCode: "pokemon",
-			Name:     body.Name,
-			Variants: body.Variants,
-		})
-		if err != nil || len(result.Cards) == 0 {
-			Error(w, http.StatusBadRequest, "carta no disponible")
-			return
-		}
-		card := applyPriceDiscount(result.Cards[0], 0.80)
-		JSON(w, http.StatusOK, card)
-		return
-	}
-
-	code := languageNameToCode(body.Language)
-	if code == "" {
-		Error(w, http.StatusBadRequest, "idioma no reconocido: "+body.Language)
-		return
-	}
-	// No se filtra por expansion_code: los sets japoneses tienen códigos
-	// distintos a los ingleses, así que la búsqueda combinada no devuelve nada.
-	result, err := h.search.Search(r.Context(), out.SearchParams{
-		GameCode:     "pokemon",
-		Name:         body.Name,
-		Variants:     body.Variants,
-		LanguageCode: code,
+	card, err := h.priceByLanguage.Execute(r.Context(), appCatalog.PriceByLanguageInput{
+		GameCode:      "pokemon",
+		ExternalID:    body.ExternalID,
+		Name:          body.Name,
+		ExpansionCode: body.ExpansionCode,
+		Rarity:        body.Rarity,
+		Language:      body.Language,
+		Variants:      body.Variants,
 	})
 	if err != nil {
-		slog.Error("price-by-language scrydex error", slog.Any("err", err))
 		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
-	if len(result.Cards) == 0 {
-		slog.Info("price-by-language sin resultados", slog.String("name", body.Name), slog.String("code", code))
-		Error(w, http.StatusBadRequest, "carta no disponible en ese idioma")
-		return
-	}
-	JSON(w, http.StatusOK, result.Cards[0])
+	JSON(w, http.StatusOK, card)
 }
 
 // FetchOne obtiene una carta de Pokémon por ID.

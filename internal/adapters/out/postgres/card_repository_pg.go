@@ -334,28 +334,39 @@ func repriceListings(ctx context.Context, tx pgx.Tx, variantID int64, price *cat
 func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) ([]catalog.CardSummary, int, error) {
 	offset := (p.Page - 1) * p.PageSize
 
-	// display_price: precio que se muestra y por el que se ordena y filtra el
-	// catálogo. Es el menor precio NM de mercado entre las variantes de la
-	// carta; si la carta no tiene precio de mercado —porque se dio de alta a
-	// mano y su external_id no existe en Scrydex— se cae al menor precio del
-	// listing activo, que es lo que el cliente realmente paga. Antes esas
-	// cartas salían con precio 0, o sea sin precio.
+	// listingPrice: el precio más barato al que el cliente puede comprar
+	// realmente la carta hoy, es decir el menor price_cop entre sus listings
+	// activos con stock. Es el precio "desde" que se anuncia y por el que se
+	// ordena y filtra el catálogo.
+	//
+	// Se lee de inventory_listings y no de variant_prices a propósito: el
+	// precio de mercado es siempre el de la impresión en inglés, mientras que
+	// el precio de venta depende del idioma (el español se publica al 80 %).
+	// Mostrar el de mercado anunciaba un precio que el cliente no se cobraba.
 	listingPrice := `
 			COALESCE((
-				SELECT MIN(il_p.price_cop)
+				SELECT MIN(il_p.price_cop)::bigint
 				FROM card_variants cv_l
 				JOIN inventory_listings il_p ON il_p.variant_id = cv_l.id
 				WHERE cv_l.card_id = c.id
 				  AND il_p.status = 'active' AND il_p.quantity > 0 AND il_p.price_cop > 0
 			), 0)::bigint`
 
-	displayPrice := `
+	// marketPrice: precio de mercado NM más bajo entre las variantes de la
+	// carta. Solo se usa como respaldo, para las cartas dadas de alta a mano
+	// cuyo external_id no existe en Scrydex y por tanto no tienen listing
+	// re-preciado... o más bien, para las que aún no tienen precio en listing.
+	marketPrice := `
 		COALESCE((
-			SELECT MIN(vp_p.price_cop)
+			SELECT MIN(vp_p.price_cop)::bigint
 			FROM card_variants cv_p
 			JOIN variant_prices vp_p ON vp_p.variant_id = cv_p.id AND vp_p.condition = 'near_mint'
 			WHERE cv_p.card_id = c.id AND vp_p.price_cop > 0
-		), ` + listingPrice + `, 0)::bigint`
+		), 0)::bigint`
+
+	// El precio que se muestra, ordena y filtra es el de venta; el de mercado
+	// entra solo cuando no hay ningún listing con precio.
+	displayPrice := `COALESCE(NULLIF(` + listingPrice + `, 0), ` + marketPrice + `)::bigint`
 
 	orderBy := "e.release_date DESC, c.id"
 	switch p.Sort {
@@ -401,43 +412,49 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				FROM (
 				SELECT
 					cv.variant_name AS name,
-					-- Precio de mercado si existe; si no, el del listing activo
-					-- más barato de la variante. NULLIF trata el 0 como "sin
-					-- precio de mercado" para que caiga al respaldo.
-					COALESCE(NULLIF(vp.price_usd, 0), (
-						SELECT MIN(ilp.price_usd)
+					-- Precio "desde" de la variante: el más barato entre los
+					-- listings activos, que es lo que el cliente puede llegar a
+					-- pagar (el español se publica al 80 por ciento del mercado).
+					-- El precio de mercado es solo el respaldo para una variante sin
+					-- listings con precio. ::bigint es necesario: price_cop es
+					-- numeric y MIN devuelve 8000.00, que no entra en el int64 de
+					-- VariantBrief.price_cop al deserializar el JSON.
+					COALESCE((
+						SELECT MIN(ilp.price_usd)::float8
 						FROM inventory_listings ilp
 						WHERE ilp.variant_id = cv.id
 						  AND ilp.status = 'active' AND ilp.quantity > 0 AND ilp.price_usd > 0
-					), 0) AS price_usd,
-					COALESCE(NULLIF(vp.price_cop, 0), (
-						-- ::bigint es necesario: inventory_listings.price_cop es
-						-- numeric y MIN devuelve 8000.00, que no entra en el
-						-- int64 de VariantBrief.price_cop al deserializar el JSON.
+					), NULLIF(vp.price_usd, 0), 0) AS price_usd,
+					COALESCE((
 						SELECT MIN(ilp.price_cop)::bigint
 						FROM inventory_listings ilp
 						WHERE ilp.variant_id = cv.id
 						  AND ilp.status = 'active' AND ilp.quantity > 0 AND ilp.price_cop > 0
-					), 0) AS price_cop,
-						COALESCE((
-							SELECT json_agg(ls ORDER BY ls.stock DESC)
-							FROM (
-								SELECT
-									il2.language AS name,
-									GREATEST(SUM(il2.quantity) - COALESCE(MAX(r2.reserved), 0), 0)::int AS stock
-								FROM inventory_listings il2
-								LEFT JOIN LATERAL (
-									SELECT SUM(cr2.quantity)::int AS reserved
-									FROM cart_reservations cr2
-									JOIN inventory_listings crl2 ON crl2.id = cr2.listing_id
-									JOIN card_variants crv2 ON crv2.id = crl2.variant_id
-									WHERE crv2.id = cv.id AND cr2.status = 'active' AND crl2.language = il2.language
-								) r2 ON true
-								WHERE il2.variant_id = cv.id AND il2.status = 'active' AND il2.quantity > 0
-								  AND il2.language IS NOT NULL AND il2.language <> ''
-								GROUP BY il2.language
-							) ls
-						), '[]'::json) AS languages
+					), NULLIF(vp.price_cop, 0), 0) AS price_cop,
+					COALESCE((
+						SELECT json_agg(ls ORDER BY ls.stock DESC)
+						FROM (
+							SELECT
+								il2.language AS name,
+								GREATEST(SUM(il2.quantity) - COALESCE(MAX(r2.reserved), 0), 0)::int AS stock,
+								-- Precio de compra en este idioma. ::bigint por lo
+								-- mismo que arriba: un numeric con decimales no
+								-- deserializa en un int64.
+								MIN(il2.price_usd)::float8 AS price_usd,
+								MIN(il2.price_cop)::bigint AS price_cop
+							FROM inventory_listings il2
+							LEFT JOIN LATERAL (
+								SELECT SUM(cr2.quantity)::int AS reserved
+								FROM cart_reservations cr2
+								JOIN inventory_listings crl2 ON crl2.id = cr2.listing_id
+								JOIN card_variants crv2 ON crv2.id = crl2.variant_id
+								WHERE crv2.id = cv.id AND cr2.status = 'active' AND crl2.language = il2.language
+							) r2 ON true
+							WHERE il2.variant_id = cv.id AND il2.status = 'active' AND il2.quantity > 0
+							  AND il2.language IS NOT NULL AND il2.language <> ''
+							GROUP BY il2.language
+						) ls
+					), '[]'::json) AS languages
 					FROM card_variants cv
 					LEFT JOIN variant_prices vp ON vp.variant_id = cv.id AND vp.condition = 'near_mint'
 					WHERE cv.card_id = c.id
@@ -461,7 +478,11 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				SELECT json_agg(l ORDER BY l.stock DESC)
 				FROM (
 				SELECT il.language AS name,
-				       GREATEST(SUM(il.quantity) - COALESCE(MAX(cr.reserved), 0), 0)::int AS stock
+				       GREATEST(SUM(il.quantity) - COALESCE(MAX(cr.reserved), 0), 0)::int AS stock,
+				       -- Precio "desde" de la carta en este idioma. ::bigint porque
+				       -- price_cop es numeric y un decimal no entra en int64.
+				       MIN(il.price_usd)::float8 AS price_usd,
+				       MIN(il.price_cop)::bigint AS price_cop
 				FROM inventory_listings il
 				JOIN card_variants lcv ON lcv.id = il.variant_id
 				LEFT JOIN LATERAL (

@@ -97,11 +97,16 @@ type CardSummary struct {
 }
 
 type VariantBrief struct {
-	Name     string  `json:"name"`
+	Name string `json:"name"`
+	// PriceUSD y PriceCOP son el precio más barato entre los idiomas con stock
+	// de esta variante: es el precio "desde" que se anuncia en el catálogo. El
+	// precio de un idioma concreto está en Languages, porque el mismo listado
+	// puede tener precios distintos por idioma.
 	PriceUSD float64 `json:"price_usd"`
 	PriceCOP int64   `json:"price_cop"`
 	// Idiomas en los que existe esta variante en el inventario activo, con su
-	// stock (cantidad del listing menos reservas cart activas de ese idioma).
+	// stock (cantidad del listing menos reservas cart activas de ese idioma) y
+	// su precio.
 	Languages []CardLanguageBrief `json:"languages"`
 }
 
@@ -109,6 +114,12 @@ type VariantBrief struct {
 type CardLanguageBrief struct {
 	Name  string `json:"name"`
 	Stock int    `json:"stock"`
+	// Precio al que el cliente compra en este idioma, tomado del listing
+	// activo. Es el precio real por idioma: el español se publica al 80 % del
+	// precio de mercado en inglés, y el catálogo tiene que reflejarlo en vez de
+	// mostrar el precio de mercado de otro idioma.
+	PriceUSD float64 `json:"price_usd"`
+	PriceCOP int64   `json:"price_cop"`
 }
 
 type ExpansionBrief struct {

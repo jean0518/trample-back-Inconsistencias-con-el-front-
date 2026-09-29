@@ -72,6 +72,7 @@ func main() {
 
 	// Casos de uso
 	searchUC := appCatalog.NewSearchScrydex(scrydexClient, trmClient)
+	priceByLanguageUC := appCatalog.NewPriceByLanguageUseCase(searchUC)
 	syncExpansionsUC := appCatalog.NewSyncExpansionsUseCase(scrydexClient, expansionRepo)
 	importCardUC := appCatalog.NewImportCardUseCase(searchUC, cardRepo)
 	importListingUC := appCatalog.NewImportListingUseCase(searchUC, cardRepo, listingRepo, ownerRepo, trmClient)
@@ -121,8 +122,8 @@ func main() {
 		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, secureCookie),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
-		Pokemon:        httpadapter.NewPokemonHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
-		Magic:          httpadapter.NewMagicHandler(searchUC, syncExpansionsUC, importCardUC, importListingUC),
+		Pokemon:        httpadapter.NewPokemonHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
+		Magic:          httpadapter.NewMagicHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Webhook:        httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),

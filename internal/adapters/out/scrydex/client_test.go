@@ -32,7 +32,7 @@ func TestBuildQueryName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildQuery("pokemon", tt.input, "", "", "", "", "")
+			got := buildQuery("pokemon", "", tt.input, "", "", "", "", "")
 			want := strings.TrimSpace(tt.nameClause + " " + pocketExclusion)
 			if got != want {
 				t.Fatalf("got %q, want %q", got, want)
@@ -42,7 +42,7 @@ func TestBuildQueryName(t *testing.T) {
 }
 
 func TestBuildQueryMantieneOtrosFiltros(t *testing.T) {
-	got := buildQuery("pokemon", "Team Rocket's Factory", "me2pt5", "Rare", "", "Trainer", "")
+	got := buildQuery("pokemon", "", "Team Rocket's Factory", "me2pt5", "Rare", "", "Trainer", "")
 	for _, want := range []string{
 		`name:"Team Rocket's Factory"`,
 		"expansion.id:me2pt5",
@@ -57,8 +57,8 @@ func TestBuildQueryMantieneOtrosFiltros(t *testing.T) {
 }
 
 func TestFallbackSinSimbolosDifiereDelPrimario(t *testing.T) {
-	primary := buildQuery("pokemon", "pikachu.", "", "", "", "", "")
-	fallback := buildQuery("pokemon", stripNameSymbols("pikachu."), "", "", "", "", "")
+	primary := buildQuery("pokemon", "", "pikachu.", "", "", "", "", "")
+	fallback := buildQuery("pokemon", "", stripNameSymbols("pikachu."), "", "", "", "", "")
 
 	wantPrimary := "name:pikachu.* " + pocketExclusion
 	if primary != wantPrimary {
@@ -87,15 +87,46 @@ func TestStripNameSymbolsReduceALetrasYDigitos(t *testing.T) {
 }
 
 func TestBuildQueryMTGUsaTypes(t *testing.T) {
-	got := buildQuery("mtg", "", "", "", "Instant", "Creature", "")
+	got := buildQuery("mtg", "", "", "", "", "Instant", "Creature", "")
 	if !strings.Contains(got, "types:Instant") || strings.Contains(got, "supertype:") {
 		t.Fatalf("mtg debe usar types: e ignorar supertype, got %q", got)
 	}
 }
 
 func TestBuildQueryPokemonSinSupertype(t *testing.T) {
-	got := buildQuery("pokemon", "mewtwo", "", "", "", "", "")
+	got := buildQuery("pokemon", "", "mewtwo", "", "", "", "", "")
 	if strings.Contains(got, "supertype:") {
 		t.Fatalf("no debe incluir supertype vacío, got %q", got)
+	}
+}
+
+func TestBuildQueryFiltraPorID(t *testing.T) {
+	// El filtro por ID es lo que impide que una búsqueda por nombre devuelva
+	// otra impresión de la misma carta (p. ej. "Mew ex" #66 en vez de #158).
+	got := buildQuery("pokemon", "me55-158", "Mew ex", "", "", "", "", "EN")
+	if !strings.HasPrefix(got, "id:me55-158 ") {
+		t.Fatalf("el filtro por id debe ir primero, got %q", got)
+	}
+	for _, want := range []string{"id:me55-158", `name:"Mew ex"`, "language_code:EN", pocketExclusion} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("query %q no contiene %q", got, want)
+		}
+	}
+}
+
+func TestBuildQuerySinIDNoAgregaFiltro(t *testing.T) {
+	got := buildQuery("pokemon", "", "Mew ex", "", "", "", "", "")
+	if strings.Contains(got, "id:") {
+		t.Fatalf("no debe agregar filtro id: cuando no hay external_id, got %q", got)
+	}
+}
+
+func TestBuildQueryIDAisladoNoUsaNombre(t *testing.T) {
+	// Scrydex resuelve `id:` sin necesidad del nombre, y usarlo solo evita
+	// depender de que el nombre escrito por el front coincida con el indexado.
+	got := buildQuery("pokemon", "me55-158", "", "", "", "", "", "")
+	want := "id:me55-158 " + pocketExclusion
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

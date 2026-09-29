@@ -195,7 +195,7 @@ type scrydexMTGExp struct {
 // --- Métodos públicos ---
 
 func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog.Card, error) {
-	q := buildQuery(p.GameCode, p.Name, p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
+	q := buildQuery(p.GameCode, p.ExternalID, p.Name, p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
 	cards, err := c.searchOnce(ctx, p.GameCode, q, p.Variants)
 	if err != nil {
 		return nil, err
@@ -204,8 +204,10 @@ func (c *Client) SearchCards(ctx context.Context, p out.SearchParams) ([]catalog
 	// cuyo signo de puntuación no existe en el nombre indexado (p. ej. un
 	// punto final en "pikachu."). Si la búsqueda conservada ya arrojó
 	// resultados (o la query alternativa es idéntica) no se vuelve a consultar.
-	if len(cards) == 0 {
-		fallback := buildQuery(p.GameCode, stripNameSymbols(p.Name), p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
+	// Con ExternalID el reintento se salta: el ID ya identifica la impression
+	// y repetir la misma consulta no puede agregar resultados.
+	if len(cards) == 0 && p.ExternalID == "" {
+		fallback := buildQuery(p.GameCode, "", stripNameSymbols(p.Name), p.ExpansionCode, p.Rarity, p.Type, p.Supertype, p.LanguageCode)
 		if fallback != q {
 			slog.Info("scrydex retry sin simbolos", slog.String("query", fallback))
 			cards, err = c.searchOnce(ctx, p.GameCode, fallback, p.Variants)
@@ -581,8 +583,13 @@ func toMTGVariants(raw []scrydexMTGVariant) []catalog.Variant {
 
 // --- Query builder ---
 
-func buildQuery(gameCode, name, expansionCode, rarity, cardType, supertype, languageCode string) string {
+func buildQuery(gameCode, externalID, name, expansionCode, rarity, cardType, supertype, languageCode string) string {
 	var parts []string
+	// El filtro por ID va primero: es el único que identifica la impression con
+	// certeza, así que si viene hay que aplicarlo sí o sí.
+	if externalID != "" {
+		parts = append(parts, "id:"+quote(externalID))
+	}
 	if clause := buildNameClause(name); clause != "" {
 		parts = append(parts, clause)
 	}

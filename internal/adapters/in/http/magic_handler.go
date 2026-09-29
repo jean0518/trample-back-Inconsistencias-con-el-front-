@@ -11,19 +11,27 @@ import (
 )
 
 type MagicHandler struct {
-	search        *appCatalog.SearchScrydex
-	expansions    *appCatalog.SyncExpansionsUseCase
-	importCard    *appCatalog.ImportCardUseCase
-	importListing *appCatalog.ImportListingUseCase
+	search          *appCatalog.SearchScrydex
+	priceByLanguage *appCatalog.PriceByLanguageUseCase
+	expansions      *appCatalog.SyncExpansionsUseCase
+	importCard      *appCatalog.ImportCardUseCase
+	importListing   *appCatalog.ImportListingUseCase
 }
 
 func NewMagicHandler(
 	search *appCatalog.SearchScrydex,
+	priceByLanguage *appCatalog.PriceByLanguageUseCase,
 	expansions *appCatalog.SyncExpansionsUseCase,
 	importCard *appCatalog.ImportCardUseCase,
 	importListing *appCatalog.ImportListingUseCase,
 ) *MagicHandler {
-	return &MagicHandler{search: search, expansions: expansions, importCard: importCard, importListing: importListing}
+	return &MagicHandler{
+		search:          search,
+		priceByLanguage: priceByLanguage,
+		expansions:      expansions,
+		importCard:      importCard,
+		importListing:   importListing,
+	}
 }
 
 // Search busca cartas de Magic en Scrydex.
@@ -68,10 +76,21 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PriceByLanguage busca el precio de una carta de Magic en un idioma específico.
+// PriceByLanguage devuelve el precio de mercado de una carta de Magic en un
+// idioma concreto. El front lo usa al editar un listing para re-preciarlo.
+//
+//	@Summary      Precio de carta Magic por idioma
+//	@Tags         magic
+//	@Accept       json
+//	@Produce      json
+//	@Param        body  body  object{name=string,external_id=string,expansion_code=string,rarity=string,language=string,variants=[]string}  true  "Filtros con idioma"
+//	@Success      200   {object}  catalog.Card
+//	@Failure      400   {object}  object{error=string}
+//	@Router       /scrydex/magic/cards/price-by-language [post]
 func (h *MagicHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
+		ExternalID    string   `json:"external_id"`
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Language      string   `json:"language"`
@@ -81,48 +100,25 @@ func (h *MagicHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
 		return
 	}
-	if body.Name == "" || body.Language == "" {
-		Error(w, http.StatusBadRequest, "name y language son requeridos")
-		return
-	}
-	code := languageNameToCode(body.Language)
-	if code == "" {
-		Error(w, http.StatusBadRequest, "idioma no reconocido: "+body.Language)
-		return
-	}
-	if isSpanish(body.Language) {
-		result, err := h.search.Search(r.Context(), out.SearchParams{
-			GameCode: "mtg",
-			Name:     body.Name,
-			Variants: body.Variants,
-		})
-		if err != nil {
-			Error(w, http.StatusBadRequest, friendlyErr(err))
-			return
-		}
-		if len(result.Cards) == 0 {
-			Error(w, http.StatusBadRequest, "carta no disponible")
-			return
-		}
-		JSON(w, http.StatusOK, applyPriceDiscount(result.Cards[0], 0.80))
+	if body.Language == "" {
+		Error(w, http.StatusBadRequest, "language es requerido")
 		return
 	}
 
-	result, err := h.search.Search(r.Context(), out.SearchParams{
-		GameCode:     "mtg",
-		Name:         body.Name,
-		Variants:     body.Variants,
-		LanguageCode: code,
+	card, err := h.priceByLanguage.Execute(r.Context(), appCatalog.PriceByLanguageInput{
+		GameCode:      "mtg",
+		ExternalID:    body.ExternalID,
+		Name:          body.Name,
+		ExpansionCode: body.ExpansionCode,
+		Rarity:        body.Rarity,
+		Language:      body.Language,
+		Variants:      body.Variants,
 	})
 	if err != nil {
 		Error(w, http.StatusBadRequest, friendlyErr(err))
 		return
 	}
-	if len(result.Cards) == 0 {
-		Error(w, http.StatusBadRequest, "carta no disponible en ese idioma")
-		return
-	}
-	JSON(w, http.StatusOK, result.Cards[0])
+	JSON(w, http.StatusOK, card)
 }
 
 func (h *MagicHandler) FetchOne(w http.ResponseWriter, r *http.Request) {

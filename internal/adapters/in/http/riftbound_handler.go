@@ -59,13 +59,14 @@ func (h *RiftboundHandler) ListExpansions(w http.ResponseWriter, r *http.Request
 //	@Accept       json
 //	@Produce      json
 //
-// @Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string}  false  "Filtros (name es requerido)"
+// @Param        body  body      object{name=string,external_id=string,expansion_code=string,rarity=string,variants=[]string,type=string}  false  "Filtros (name o external_id es requerido)"
 // @Success      200   {object}  object{search_id=string,total=integer,cards=[]catalog.Card}
 // @Failure      400   {object}  object{error=string}
 // @Router       /scrydex/riftbound/cards [post]
 func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
+		ExternalID    string   `json:"external_id"`
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Variants      []string `json:"variants"`
@@ -78,6 +79,7 @@ func (h *RiftboundHandler) Search(w http.ResponseWriter, r *http.Request) {
 	result, err := h.catalog.Search(r.Context(), out.SearchParams{
 		GameCode:      "riftbound",
 		Name:          body.Name,
+		ExternalID:    body.ExternalID,
 		ExpansionCode: body.ExpansionCode,
 		Rarity:        body.Rarity,
 		Variants:      body.Variants,

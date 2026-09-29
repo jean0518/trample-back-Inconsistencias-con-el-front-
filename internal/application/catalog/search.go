@@ -41,8 +41,11 @@ func NewSearchScrydex(scrydex out.ScrydexClient, trm out.TRMClient) *SearchScryd
 }
 
 func (uc *SearchScrydex) Search(ctx context.Context, p out.SearchParams) (SearchResult, error) {
-	if p.GameCode == "" || p.Name == "" {
-		return SearchResult{}, fmt.Errorf("game_code y name son requeridos")
+	// El ID basta por sí solo: acotar por `id:` no necesita el nombre, y exigirlo
+	// dejaría fuera la búsqueda por ID puro, que es la única forma de señalar una
+	// impresión exacta cuando el nombre no es único.
+	if p.GameCode == "" || (p.Name == "" && p.ExternalID == "") {
+		return SearchResult{}, fmt.Errorf("game_code y (name o external_id) son requeridos")
 	}
 	cards, err := uc.scrydex.SearchCards(ctx, p)
 	if err != nil {

@@ -435,13 +435,20 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 						SELECT json_agg(ls ORDER BY ls.stock DESC)
 						FROM (
 							SELECT
-								il2.language AS name,
-								GREATEST(SUM(il2.quantity) - COALESCE(MAX(r2.reserved), 0), 0)::int AS stock,
-								-- Precio de compra en este idioma. ::bigint por lo
-								-- mismo que arriba: un numeric con decimales no
-								-- deserializa en un int64.
-								MIN(il2.price_usd)::float8 AS price_usd,
-								MIN(il2.price_cop)::bigint AS price_cop
+							il2.language AS name,
+							GREATEST(SUM(il2.quantity) - COALESCE(MAX(r2.reserved), 0), 0)::int AS stock,
+							-- Precio de compra en este idioma. Los dos valores salen del
+							-- MISMO listing, el más barato en COP, y no de dos MIN
+							-- independientes: con mínimos sueltos un idioma puede devolver
+							-- el USD de un listing y el COP de otro, un precio que no
+							-- existe en ningún anuncio. El FILTER deja fuera los listings sin
+							-- precio para que no se inventen, pero sin sacarlos del stock: hay
+							-- existencias aunque falte ponerles precio. ::bigint porque
+							-- price_cop es numeric y un decimal no entra en un int64.
+							(array_agg(il2.price_usd::float8 ORDER BY il2.price_cop, il2.id)
+								FILTER (WHERE il2.price_cop > 0))[1] AS price_usd,
+							(array_agg(il2.price_cop::bigint ORDER BY il2.price_cop, il2.id)
+								FILTER (WHERE il2.price_cop > 0))[1] AS price_cop
 							FROM inventory_listings il2
 							LEFT JOIN LATERAL (
 								SELECT SUM(cr2.quantity)::int AS reserved
@@ -479,10 +486,13 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 				FROM (
 				SELECT il.language AS name,
 				       GREATEST(SUM(il.quantity) - COALESCE(MAX(cr.reserved), 0), 0)::int AS stock,
-				       -- Precio "desde" de la carta en este idioma. ::bigint porque
-				       -- price_cop es numeric y un decimal no entra en int64.
-				       MIN(il.price_usd)::float8 AS price_usd,
-				       MIN(il.price_cop)::bigint AS price_cop
+				       -- Precio "desde" de la carta en este idioma. Ambos valores
+				       -- vienen del mismo listing, el más barato en COP, por el mismo
+				       -- motivo que arriba; el FILTER no los saca del stock.
+				       (array_agg(il.price_usd::float8 ORDER BY il.price_cop, il.id)
+					       FILTER (WHERE il.price_cop > 0))[1] AS price_usd,
+				       (array_agg(il.price_cop::bigint ORDER BY il.price_cop, il.id)
+					       FILTER (WHERE il.price_cop > 0))[1] AS price_cop
 				FROM inventory_listings il
 				JOIN card_variants lcv ON lcv.id = il.variant_id
 				LEFT JOIN LATERAL (

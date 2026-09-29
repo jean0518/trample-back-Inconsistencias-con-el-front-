@@ -2,11 +2,17 @@ package catalog
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/listing"
 )
+
+// testTRM es la TRM con la que se construyen las cartas del fixture. Sus valores
+// pasan por las mismas reglas que aplica applyTRM en producción, para que el test
+// no valide un COP que el código real nunca produciría.
+const testTRM = 3309.0
 
 // mw es una impresión de Mew ex tal como la devuelve hoy Scrydex. El caso que
 // motivó este código es real: "Mew ex" tiene 32 impresiones y la búsqueda por
@@ -20,8 +26,14 @@ func mw(id, expansion, number, rarity string, marketUSD float64) catalog.Card {
 		Rarity:     rarity,
 		Expansion:  catalog.Expansion{ExternalID: expansion, Name: "30th Celebration"},
 		Variants: []catalog.Variant{{
-			Name:    "holofoil",
-			NMPrice: &catalog.Price{MarketUSD: marketUSD, MarketCOP: 299000, LowCOP: 250000},
+			Name: "holofoil",
+			NMPrice: &catalog.Price{
+				MarketUSD: marketUSD,
+				MarketCOP: int64(listing.StandardizedPriceCOP(marketUSD, testTRM)),
+				LowUSD:    math.Round(marketUSD*0.6*100) / 100,
+				LowCOP:    int64(math.Round(math.Round(marketUSD*0.6*100) / 100 * testTRM)),
+				TRMUsed:   testTRM,
+			},
 		}},
 	}
 }
@@ -145,33 +157,81 @@ func TestNormalizeNumber(t *testing.T) {
 	}
 }
 
-func TestApplyLanguageFactor(t *testing.T) {
+func TestApplySpanishPrice(t *testing.T) {
 	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
 	card.Variants = append(card.Variants, catalog.Variant{Name: "normal", NMPrice: nil})
 
-	got := applyLanguageFactor(card, listing.SpanishPriceFactor)
+	got := applySpanishPrice(card)
 
 	holo := got.Variants[0].NMPrice
-	// 90.34 * 0.80 = 72.272 -> 72.27, que es el precio del listing en español.
+	// 90.34 * 0.80 = 72.272 -> 72.27.
 	if holo.MarketUSD != 72.27 {
 		t.Fatalf("MarketUSD = %v, want 72.27", holo.MarketUSD)
 	}
-	if holo.MarketCOP != 239200 {
-		t.Fatalf("MarketCOP = %v, want 239200", holo.MarketCOP)
+	// El COP no es 299.000 * 0,80 = 239.200: se recalcula desde el USD
+	// descontado con la regla de precio, que es la que escribe
+	// inventory_listings. 72.27 * 3309 = 239.141 -> 240.000 al millar.
+	if holo.MarketCOP != 240000 {
+		t.Fatalf("MarketCOP = %v, want 240000", holo.MarketCOP)
+	}
+	// El precio bajo sigue la misma regla que applyTRM: USD * TRM sin redondear
+	// al millar. 54.20 -> 43.36 USD, 43.36 * 3309 = 143.478.
+	if holo.LowUSD != 43.36 {
+		t.Fatalf("LowUSD = %v, want 43.36", holo.LowUSD)
+	}
+	if holo.LowCOP != 143478 {
+		t.Fatalf("LowCOP = %v, want 143478", holo.LowCOP)
 	}
 	if got.Variants[1].NMPrice != nil {
 		t.Fatal("una variante sin precio debe quedar en nil, no en 0")
 	}
-	// La copia debe ser real: si compartiera el arreglo de variantes, el
-	// descuento se escribiría también sobre la carta cacheada por SearchScrydex
-	// y dos consultas en español acumularían el factor (×0.8, ×0.64…).
+	// La copia debe ser real: si compartiera el arreglo de variantes o el
+	// puntero del precio, el descuento se escribiría también sobre la carta
+	// cacheada por SearchScrydex y dos consultas en español acumularían el
+	// factor (×0.8, ×0.64…).
 	if card.Variants[0].NMPrice.MarketUSD != 90.34 {
 		t.Fatalf("el original quedó en %v, want 90.34", card.Variants[0].NMPrice.MarketUSD)
 	}
-	twice := applyLanguageFactor(card, listing.SpanishPriceFactor)
+	twice := applySpanishPrice(card)
 	if twice.Variants[0].NMPrice.MarketUSD != 72.27 {
-		t.Fatalf("aplicar el factor dos veces sobre el original dio %v, want 72.27",
+		t.Fatalf("aplicar el descuento dos veces sobre el original dio %v, want 72.27",
 			twice.Variants[0].NMPrice.MarketUSD)
+	}
+}
+
+// TestApplySpanishPriceRespetaLaReglaDeMercado ata este endpoint con la regla que
+// aplica el resto del sistema: repriceListings escribe en inventory_listings el
+// COP que sale de SpanishPriceUSD + StandardizedPriceCOP. Si el endpoint devolviera
+// otro valor, el catálogo anunciaría un precio que ninguna compra_realiza.
+func TestApplySpanishPriceRespetaLaReglaDeMercado(t *testing.T) {
+	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
+	got := applySpanishPrice(card).Variants[0].NMPrice
+
+	wantUSD := listing.SpanishPriceUSD(90.34)
+	if got.MarketUSD != wantUSD {
+		t.Fatalf("MarketUSD = %v, want %v", got.MarketUSD, wantUSD)
+	}
+	wantCOP := int64(listing.StandardizedPriceCOP(wantUSD, testTRM))
+	if got.MarketCOP != wantCOP {
+		t.Fatalf("MarketCOP = %v, want %v", got.MarketCOP, wantCOP)
+	}
+}
+
+// TestApplySpanishPriceSinPrecioBajo comprueba que un "precio bajo" inexistente no
+// se inventa: pasarlo por StandardizedPriceCOP devolvería el mínimo fijo de 2.000
+// y el catálogo publicaría un precio que Scrydex nunca dio.
+func TestApplySpanishPriceSinPrecioBajo(t *testing.T) {
+	card := mw("me55-158", "me55", "158", "Futuristic Rare", 90.34)
+	card.Variants[0].NMPrice.LowUSD = 0
+	card.Variants[0].NMPrice.LowCOP = 0
+
+	got := applySpanishPrice(card).Variants[0].NMPrice
+
+	if got.LowUSD != 0 || got.LowCOP != 0 {
+		t.Fatalf("precio bajo = %v/%v, want 0/0", got.LowUSD, got.LowCOP)
+	}
+	if got.MarketCOP == int64(listing.FixedPriceUnderUSDCOP) {
+		t.Fatal("el precio bajo ausente no debe caer al mínimo fijo de 2.000")
 	}
 }
 

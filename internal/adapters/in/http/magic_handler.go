@@ -41,13 +41,14 @@ func NewMagicHandler(
 //	@Accept       json
 //	@Produce      json
 //
-// @Param        body  body      object{name=string,expansion_code=string,rarity=string,variants=[]string,type=string}  false  "Filtros (name es requerido)"
+// @Param        body  body      object{name=string,external_id=string,expansion_code=string,rarity=string,variants=[]string,type=string}  false  "Filtros (name o external_id es requerido)"
 // @Success      200   {object}  object{search_id=string,total=integer,cards=[]catalog.Card}
 // @Failure      400   {object}  object{error=string}
 // @Router       /scrydex/magic/cards [post]
 func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string   `json:"name"`
+		ExternalID    string   `json:"external_id"`
 		ExpansionCode string   `json:"expansion_code"`
 		Rarity        string   `json:"rarity"`
 		Variants      []string `json:"variants"`
@@ -60,6 +61,7 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 	result, err := h.search.Search(r.Context(), out.SearchParams{
 		GameCode:      "mtg",
 		Name:          body.Name,
+		ExternalID:    body.ExternalID,
 		ExpansionCode: body.ExpansionCode,
 		Rarity:        body.Rarity,
 		Variants:      body.Variants,
@@ -83,18 +85,16 @@ func (h *MagicHandler) Search(w http.ResponseWriter, r *http.Request) {
 //	@Tags         magic
 //	@Accept       json
 //	@Produce      json
-//	@Param        body  body  object{name=string,external_id=string,expansion_code=string,rarity=string,language=string,variants=[]string}  true  "Filtros con idioma"
+//	@Param        body  body  object{name=string,external_id=string,language=string,variants=[]string}  true  "Filtros con idioma"
 //	@Success      200   {object}  catalog.Card
 //	@Failure      400   {object}  object{error=string}
 //	@Router       /scrydex/magic/cards/price-by-language [post]
 func (h *MagicHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name          string   `json:"name"`
-		ExternalID    string   `json:"external_id"`
-		ExpansionCode string   `json:"expansion_code"`
-		Rarity        string   `json:"rarity"`
-		Language      string   `json:"language"`
-		Variants      []string `json:"variants"`
+		Name       string   `json:"name"`
+		ExternalID string   `json:"external_id"`
+		Language   string   `json:"language"`
+		Variants   []string `json:"variants"`
 	}
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body JSON inválido")
@@ -106,13 +106,11 @@ func (h *MagicHandler) PriceByLanguage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	card, err := h.priceByLanguage.Execute(r.Context(), appCatalog.PriceByLanguageInput{
-		GameCode:      "mtg",
-		ExternalID:    body.ExternalID,
-		Name:          body.Name,
-		ExpansionCode: body.ExpansionCode,
-		Rarity:        body.Rarity,
-		Language:      body.Language,
-		Variants:      body.Variants,
+		GameCode:   "mtg",
+		ExternalID: body.ExternalID,
+		Name:       body.Name,
+		Language:   body.Language,
+		Variants:   body.Variants,
 	})
 	if err != nil {
 		Error(w, http.StatusBadRequest, friendlyErr(err))

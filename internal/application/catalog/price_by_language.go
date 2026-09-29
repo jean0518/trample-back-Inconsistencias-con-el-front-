@@ -22,17 +22,19 @@ var ErrNotAvailableInLanguage = errors.New("carta no disponible en ese idioma")
 var ErrUnknownLanguage = errors.New("idioma no reconocido")
 
 // PriceByLanguageInput pide el precio de una impresión concreta en un idioma.
+//
+// No incluye expansión ni rareza: llegan en el idioma del catálogo, no en el del
+// índice de Scrydex que se va a consultar, así que filtrar por ellas dejaría
+// fuera la impresión buscada. Ver indexedPrice.
 type PriceByLanguageInput struct {
 	GameCode string
 	// ExternalID es el ID de Scrydex de la impresión que el staff tiene en
 	// inventario. Es obligatorio: sin él no hay forma de saber cuál de las
 	// impresiones con el mismo nombre es la correcta.
-	ExternalID    string
-	Name          string
-	ExpansionCode string
-	Rarity        string
-	Language      string
-	Variants      []string
+	ExternalID string
+	Name       string
+	Language   string
+	Variants   []string
 }
 
 // PriceByLanguageUseCase devuelve el precio de mercado de una carta en un idioma
@@ -72,7 +74,7 @@ func (uc *PriceByLanguageUseCase) Execute(ctx context.Context, in PriceByLanguag
 	// (no hay una impresión en español que buscar), la carta de referencia ya
 	// *es* la respuesta: no hace falta una segunda consulta.
 	if listing.IsSpanishLanguage(in.Language) {
-		return applyLanguageFactor(ref, listing.SpanishPriceFactor), nil
+		return applySpanishPrice(ref), nil
 	}
 
 	code := LanguageNameToCode(in.Language)
@@ -96,18 +98,23 @@ func (uc *PriceByLanguageUseCase) resolvePrinting(ctx context.Context, in PriceB
 
 // indexedPrice consulta el precio en el idioma que Scrydex sí indexa (japonés,
 // coreano, francés…) y elige la impresión que corresponde.
+//
+// La búsqueda es lo más amplia posible —solo nombre e idioma— y la impresión se
+// selecciona después, con matchPrinting. No se filtra por expansión ni por
+// rareza porque en el índice del idioma destino esos dos datos son otros:
+// Scrydex da a las impresiones no inglesas su propia expansión (sv4pt5_ja en vez
+// de sv4pt5) y su propia rareza, traducida y con otro código ("Double Rare" /
+// "RR" en inglés, "スーパーレア" / "SR" en japonés). Filtrar por los valores de la
+// versión inglesa dejaría fuera exactamente la carta que se busca, y el fallo
+// aparecería como "no disponible en ese idioma". Acortar el conjunto de
+// candidatos no hace falta: matchPrinting exige coincidencia exacta de ID o de
+// expansión base más número impreso.
 func (uc *PriceByLanguageUseCase) indexedPrice(ctx context.Context, in PriceByLanguageInput, ref catalog.Card, languageCode string) (catalog.Card, error) {
-	// No se filtra por expansión: las impresiones en otro idioma tienen su
-	// propia expansión en Scrydex (sv4pt5_ja en vez de sv4pt5), así que el
-	// filtro de la versión inglesa las excluiría a todas. La impresión se
-	// selecciona después, comparando número impreso y rareza.
 	result, err := uc.search.Search(ctx, out.SearchParams{
-		GameCode:      in.GameCode,
-		Name:          in.Name,
-		ExpansionCode: in.ExpansionCode,
-		Rarity:        in.Rarity,
-		Variants:      in.Variants,
-		LanguageCode:  languageCode,
+		GameCode:     in.GameCode,
+		Name:         in.Name,
+		Variants:     in.Variants,
+		LanguageCode: languageCode,
 	})
 	if err != nil {
 		return catalog.Card{}, fmt.Errorf("%w: %v", ErrNotAvailableInLanguage, err)
@@ -174,9 +181,9 @@ func baseExpansionID(expansionID string) string {
 // carta, que es exactamente el bug que este código evita.
 func matchPrinting(ref printingIdentity, candidates []catalog.Card) (catalog.Card, bool) {
 	const (
-		noMatch   = 0
-		byPrintng = 1
-		byScrydex = 2
+		noMatch    = 0
+		byPrinting = 1
+		byScrydex  = 2
 	)
 
 	best, bestRank := -1, noMatch
@@ -189,7 +196,7 @@ func matchPrinting(ref printingIdentity, candidates []catalog.Card) (catalog.Car
 			rank = byScrydex
 		case ref.ExpansionKey != "" && ref.Number != "" &&
 			id.ExpansionKey == ref.ExpansionKey && id.Number == ref.Number:
-			rank = byPrintng
+			rank = byPrinting
 		}
 
 		if rank > bestRank {
@@ -210,11 +217,18 @@ func normalizeNumber(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "#")
 }
 
-// applyLanguageFactor devuelve una copia de la carta con todos los precios de
-// sus variantes multiplicados por factor. Las variantes sin precio se saltan en
-// lugar de quedar en 0, que es lo que ocurría al asignar sobre un puntero nil.
-func applyLanguageFactor(card catalog.Card, factor float64) catalog.Card {
-	if factor == 1 || len(card.Variants) == 0 {
+// applySpanishPrice devuelve una copia de la carta con sus precios de mercado
+// convertidos al del español. Las variantes sin precio se saltan en lugar de
+// quedar en 0, que es lo que ocurría al asignar sobre un puntero nil.
+//
+// El descuento no se aplica multiplicando el COP que ya vino redondeado: se
+// recalcula desde el USD descontado con la misma regla de siempre
+// (SpanishPriceUSD + StandardizedPriceCOP), igual que hace repriceListings al
+// re-preciar un listing en español. Si no, el catálogo anunciaría un COP que
+// nunca se escribiría en inventory_listings — 299.000 × 0,80 da 239.200, pero la
+// regla sobre 72,27 USD da 240.000.
+func applySpanishPrice(card catalog.Card) catalog.Card {
+	if len(card.Variants) == 0 {
 		return card
 	}
 
@@ -223,6 +237,8 @@ func applyLanguageFactor(card catalog.Card, factor float64) catalog.Card {
 	// card.Variants[i] modificaría también la carta de quien la pasó — y el
 	// resultado de la búsqueda queda cacheado, con lo que dos consultas en
 	// español sobre la misma carta acumularían el factor (×0.8, ×0.64, ×0.51…).
+	// El precio además es un puntero compartido, así que también se copia por
+	// valor: mutarlo en el sitio escribiría sobre la carta cacheada.
 	variants := make([]catalog.Variant, len(card.Variants))
 	copy(variants, card.Variants)
 	card.Variants = variants
@@ -232,10 +248,22 @@ func applyLanguageFactor(card catalog.Card, factor float64) catalog.Card {
 			continue
 		}
 		p := *card.Variants[i].NMPrice
-		p.MarketUSD = math.Round(p.MarketUSD*factor*100) / 100
-		p.LowUSD = math.Round(p.LowUSD*factor*100) / 100
-		p.MarketCOP = int64(math.Round(float64(p.MarketCOP) * factor))
-		p.LowCOP = int64(math.Round(float64(p.LowCOP) * factor))
+
+		// Regla de precio de mercado: ver applyTRM en search.go. Se conserva
+		// para que MarketCOP siga siendo derivable de MarketUSD.
+		p.MarketUSD = listing.SpanishPriceUSD(p.MarketUSD)
+		p.MarketCOP = int64(listing.StandardizedPriceCOP(p.MarketUSD, p.TRMUsed))
+
+		// El precio bajo es opcional: Scrydex no siempre lo trae. Con LowUSD en 0
+		// se deja en 0 en vez de pasarlo por StandardizedPriceCOP, que devolvería
+		// el mínimo fijo de 2.000 y publicaría un "precio bajo" que no existe.
+		if p.LowUSD > 0 {
+			p.LowUSD = listing.SpanishPriceUSD(p.LowUSD)
+			p.LowCOP = int64(math.Round(p.LowUSD * p.TRMUsed))
+		} else {
+			p.LowUSD, p.LowCOP = 0, 0
+		}
+
 		card.Variants[i].NMPrice = &p
 	}
 	return card

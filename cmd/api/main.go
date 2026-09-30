@@ -19,6 +19,7 @@ import (
 	"time"
 
 	httpadapter "trample-back/internal/adapters/in/http"
+	"trample-back/internal/adapters/out/bold"
 	"trample-back/internal/adapters/out/postgres"
 	"trample-back/internal/adapters/out/scrydex"
 	"trample-back/internal/adapters/out/supabase"
@@ -56,6 +57,9 @@ func main() {
 	// Clientes externos
 	scrydexClient := scrydex.NewClient(cfg.ScrydexAPIKey, cfg.ScrydexTeamID)
 	trmClient := trm.NewClient()
+	// Pasarela de pagos. Sin BOLD_IDENTITY_KEY el checkout en línea queda
+	// deshabilitado y la tienda sigue funcionando con transferencia/efectivo.
+	boldClient := bold.NewClient(cfg.BoldIdentityKey, cfg.BoldSecretKey, cfg.BoldAPIBaseURL)
 
 	// Repositorios
 	expansionRepo := postgres.NewExpansionRepository(pool)
@@ -111,8 +115,14 @@ func main() {
 	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(adminUserRepo)
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo)
+	// El pago en línea no registra el pedido: deja listo el checkout con la
+	// referencia de la pasarela. El pedido se crea al aprobarse el pago.
+	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
 	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
+	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient)
+	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo)
+	expireCheckoutsUC := appSale.NewExpireCheckoutsUseCase(saleRepo)
 	dashboardSummaryUC := appDashboard.NewSummaryUseCase(dashboardRepo)
 
 	// Router
@@ -126,11 +136,12 @@ func main() {
 		Magic:          httpadapter.NewMagicHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
 		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
 		Webhook:        httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
+		Payments:       httpadapter.NewBoldWebhookHandler(processPaymentEventUC, cfg.BoldSecretKey, cfg.BoldEnv != "production"),
 		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
 		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
-		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, listSalesUC, statsSalesUC),
+		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC),
 		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC),
 		Inventory:      httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
 		CardImages:     httpadapter.NewCardImageHandler(cardImageRepo),
@@ -157,6 +168,10 @@ func main() {
 
 	// Libera periódicamente las reservas (stock temporal de 5 min) vencidas.
 	go releaseExpiredLoop(log, reservationRepo)
+
+	// Cierra los pagos en línea que el cliente nunca llegó a completar dentro de
+	// la ventana de retención, devolviendo el stock reservado.
+	go expireCheckoutsLoop(log, expireCheckoutsUC)
 
 	go func() {
 		log.Info("server starting", slog.String("port", cfg.Port))
@@ -225,6 +240,27 @@ func releaseExpiredLoop(log *slog.Logger, repo *postgres.ReservationRepository) 
 		}
 		if n > 0 {
 			log.Info("reservas expiradas liberadas", slog.Int64("count", n))
+		}
+	}
+}
+
+// expireCheckoutsLoop cierra los checkouts (pagos en línea) cuya ventana de
+// retención venció sin que el cliente pagara. Si el pago llega después, el
+// webhook lo registra y crea el pedido marcado para revisión manual en vez de
+// perder el dinero.
+func expireCheckoutsLoop(log *slog.Logger, expire *appSale.ExpireCheckoutsUseCase) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		n, err := expire.Execute(ctx)
+		cancel()
+		if err != nil {
+			log.Error("cerrar checkouts vencidos", slog.Any("error", err))
+			continue
+		}
+		if n > 0 {
+			log.Info("checkouts vencidos cerrados", slog.Int64("count", n))
 		}
 	}
 }

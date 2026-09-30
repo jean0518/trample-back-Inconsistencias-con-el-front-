@@ -4,20 +4,31 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	appSale "trample-back/internal/application/sale"
 	"trample-back/internal/domain/auth"
+	"trample-back/internal/domain/payment"
 	"trample-back/internal/domain/sale"
 )
 
 type SaleHandler struct {
-	confirm *appSale.ConfirmSaleUseCase
-	list    *appSale.ListSalesUseCase
-	stats   *appSale.SaleStatsUseCase
+	confirm     *appSale.ConfirmSaleUseCase
+	checkout    *appSale.CreateCheckoutUseCase
+	list        *appSale.ListSalesUseCase
+	stats       *appSale.SaleStatsUseCase
+	checkStatus *appSale.CheckPaymentStatusUseCase
 }
 
-func NewSaleHandler(confirm *appSale.ConfirmSaleUseCase, list *appSale.ListSalesUseCase, stats *appSale.SaleStatsUseCase) *SaleHandler {
-	return &SaleHandler{confirm: confirm, list: list, stats: stats}
+func NewSaleHandler(
+	confirm *appSale.ConfirmSaleUseCase,
+	checkout *appSale.CreateCheckoutUseCase,
+	list *appSale.ListSalesUseCase,
+	stats *appSale.SaleStatsUseCase,
+	checkStatus *appSale.CheckPaymentStatusUseCase,
+) *SaleHandler {
+	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus}
 }
 
 // canSeeAllSales indica si el usuario puede consultar el historial completo de
@@ -37,29 +48,72 @@ func canSeeAllSales(user AuthUser) bool {
 }
 
 type saleItemResponse struct {
-	ListingID  *int64  `json:"listing_id"`
-	CardID     int64   `json:"card_id"`
-	CardName   string  `json:"card_name"`
-	Language   string  `json:"language"`
-	Quantity   int     `json:"quantity"`
-	PriceCOP   int64   `json:"price_cop"`
-	PriceUSD   float64 `json:"price_usd"`
+	ListingID *int64  `json:"listing_id"`
+	CardID    int64   `json:"card_id"`
+	CardName  string  `json:"card_name"`
+	Language  string  `json:"language"`
+	Quantity  int     `json:"quantity"`
+	PriceCOP  int64   `json:"price_cop"`
+	PriceUSD  float64 `json:"price_usd"`
 }
 
 type saleResponse struct {
-	ID            int64             `json:"id"`
-	TotalCOP      int64             `json:"total_cop"`
-	TotalUSD      float64           `json:"total_usd"`
-	ShippingCOP   int64             `json:"shipping_cop"`
-	ShippingUSD   float64           `json:"shipping_usd"`
-	Fulfillment   string            `json:"fulfillment"`
-	Address       string            `json:"address"`
-	City          string            `json:"city"`
-	Phone         string            `json:"phone"`
-	PaymentMethod string            `json:"payment_method"`
-	Status        string            `json:"status"`
-	CreatedAt     string            `json:"created_at"`
-	Items         []saleItemResponse `json:"items"`
+	ID            int64   `json:"id"`
+	TotalCOP      int64   `json:"total_cop"`
+	TotalUSD      float64 `json:"total_usd"`
+	ShippingCOP   int64   `json:"shipping_cop"`
+	ShippingUSD   float64 `json:"shipping_usd"`
+	Fulfillment   string  `json:"fulfillment"`
+	Address       string  `json:"address"`
+	City          string  `json:"city"`
+	Phone         string  `json:"phone"`
+	PaymentMethod string  `json:"payment_method"`
+	Status        string  `json:"status"`
+	CreatedAt     string  `json:"created_at"`
+	// Datos del pago en línea (vacíos en efectivo o transferencia).
+	PaymentReference string             `json:"payment_reference,omitempty"`
+	BoldPaymentID    string             `json:"bold_payment_id,omitempty"`
+	PaidAt           string             `json:"paid_at,omitempty"`
+	RequiresReview   bool               `json:"requires_review"`
+	Items            []saleItemResponse `json:"items"`
+}
+
+// boldCheckoutResponse son los datos que el frontend necesita para pintar el
+// botón de pagos. La llave de identidad es pública; la de integridad la calculó
+// el backend con la llave secreta, que nunca sale del servidor.
+type boldCheckoutResponse struct {
+	Reference          string `json:"reference"`
+	AmountCOP          int64  `json:"amount_cop"`
+	Currency           string `json:"currency"`
+	IntegritySignature string `json:"integrity_signature"`
+	IdentityKey        string `json:"identity_key"`
+	RedirectionURL     string `json:"redirection_url"`
+	OriginURL          string `json:"origin_url"`
+	Description        string `json:"description"`
+	// ExpirationNS es la expiración en nanosegundos epoch (formato de
+	// data-expiration-date). Se alinea con la retención del stock: cuando el
+	// checkout se cierra por tiempo, la pasarela también deja de aceptar el pago.
+	ExpirationNS int64 `json:"expiration_ns"`
+	// CustomerData y BillingAddress son objetos JSON ya serializados que Bold
+	// precarga en su formulario para que el comprador no los escriba de nuevo.
+	CustomerData   string `json:"customer_data,omitempty"`
+	BillingAddress string `json:"billing_address,omitempty"`
+}
+
+func newBoldCheckoutResponse(c payment.Checkout) *boldCheckoutResponse {
+	return &boldCheckoutResponse{
+		Reference:          c.Reference,
+		AmountCOP:          c.AmountCOP,
+		Currency:           c.Currency,
+		IntegritySignature: c.IntegritySignature,
+		IdentityKey:        c.IdentityKey,
+		RedirectionURL:     c.RedirectionURL,
+		OriginURL:          c.OriginURL,
+		Description:        c.Description,
+		ExpirationNS:       c.ExpirationNS,
+		CustomerData:       c.CustomerData,
+		BillingAddress:     c.BillingAddress,
+	}
 }
 
 func newSaleItemResponse(it sale.SaleItem) saleItemResponse {
@@ -80,20 +134,33 @@ func newSaleResponse(s sale.Sale) saleResponse {
 		items = append(items, newSaleItemResponse(it))
 	}
 	return saleResponse{
-		ID:            s.ID,
-		TotalCOP:      s.TotalCOP,
-		TotalUSD:      s.TotalUSD,
-		ShippingCOP:   s.ShippingCOP,
-		ShippingUSD:   s.ShippingUSD,
-		Fulfillment:   s.Fulfillment,
-		Address:       s.Address,
-		City:          s.City,
-		Phone:         s.Phone,
-		PaymentMethod: s.PaymentMethod,
-		Status:        s.Status,
-		CreatedAt:     s.CreatedAt,
-		Items:         items,
+		ID:               s.ID,
+		TotalCOP:         s.TotalCOP,
+		TotalUSD:         s.TotalUSD,
+		ShippingCOP:      s.ShippingCOP,
+		ShippingUSD:      s.ShippingUSD,
+		Fulfillment:      s.Fulfillment,
+		Address:          s.Address,
+		City:             s.City,
+		Phone:            s.Phone,
+		PaymentMethod:    s.PaymentMethod,
+		Status:           s.Status,
+		CreatedAt:        s.CreatedAt,
+		PaymentReference: s.PaymentReference,
+		BoldPaymentID:    s.BoldPaymentID,
+		PaidAt:           formatTime(s.PaidAt),
+		RequiresReview:   s.RequiresReview,
+		Items:            items,
 	}
+}
+
+// formatTime devuelve el instante en RFC3339, o cadena vacía si no existe
+// (una venta en efectivo nunca tiene fecha de pago).
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 type confirmSaleRequest struct {
@@ -105,11 +172,31 @@ type confirmSaleRequest struct {
 	PaymentMethod  string  `json:"payment_method"` // efectivo | transferencia
 }
 
-// ConfirmSale registra una venta local confirmando las reservas del carrito.
-// Solo el administrador puede elegir efectivo; el resto paga por
-// transferencia.
+// confirmInputFromRequest traduce el body a la entrada del dominio. PayerEmail
+// y PayerName salen de la sesión, nunca del body: prellenan el formulario de la
+// pasarela sin confiar en lo que mande el cliente.
+func confirmInputFromRequest(r *http.Request, user AuthUser, body confirmSaleRequest, isStaff bool) sale.ConfirmInput {
+	return sale.ConfirmInput{
+		UserID:        user.ID,
+		Fulfillment:   body.Fulfillment,
+		Address:       body.Address,
+		City:          body.City,
+		Phone:         body.Phone,
+		PaymentMethod: body.PaymentMethod,
+		IsAdmin:       isStaff,
+		PayerEmail:    user.Email,
+		PayerName:     strings.TrimSpace(user.FirstName + " " + user.LastName),
+	}
+}
+
+// ConfirmSale registra una venta que YA está pagada: efectivo en el acto o
+// transferencia confirmada por el administrador.
 //
-//	@Summary      Confirmar venta
+// El pago con tarjeta no se registra por aquí a propósito: el pedido se crea
+// únicamente cuando la pasarela confirma el pago, mediante POST /sales/checkout
+// y el webhook o la consulta de estado.
+//
+//	@Summary      Confirmar venta pagada (efectivo o transferencia)
 //	@Tags         sales
 //	@Accept       json
 //	@Produce      json
@@ -126,38 +213,166 @@ func (h *SaleHandler) ConfirmSale(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	isStaff := user.Role != auth.RoleCustomer
 
 	var body confirmSaleRequest
 	if err := Decode(r, &body); err != nil {
 		Error(w, http.StatusBadRequest, "body inválido")
 		return
 	}
-
-	created, err := h.confirm.Execute(r.Context(), sale.ConfirmInput{
-		UserID:        user.ID,
-		Fulfillment:   body.Fulfillment,
-		Address:       body.Address,
-		City:          body.City,
-		Phone:         body.Phone,
-		PaymentMethod: body.PaymentMethod,
-		IsAdmin:       isStaff,
-	}, body.ReservationIDs)
-	if err != nil {
-		switch {
-		case errors.Is(err, sale.ErrEmptyCart):
-			Error(w, http.StatusBadRequest, "el carrito no tiene items para confirmar")
-		case errors.Is(err, sale.ErrInvalidInput):
-			Error(w, http.StatusBadRequest, "datos de la venta inválidos")
-		case errors.Is(err, sale.ErrReservationExpired):
-			Error(w, http.StatusConflict, err.Error())
-		default:
-			Error(w, http.StatusInternalServerError, err.Error())
-		}
+	if body.PaymentMethod == sale.PaymentBold {
+		Error(w, http.StatusBadRequest, "el pago con tarjeta se procesa en la pasarela: usa /sales/checkout")
 		return
 	}
 
-	JSON(w, http.StatusCreated, newSaleResponse(created))
+	result, err := h.confirm.Execute(r.Context(),
+		confirmInputFromRequest(r, user, body, user.Role != auth.RoleCustomer),
+		body.ReservationIDs)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+
+	JSON(w, http.StatusCreated, newSaleResponse(result.Sale))
+}
+
+// checkoutResponse describe el checkout (intención de pago) que quedó listo para
+// la pasarela. No es un pedido: todavía no existe ninguno.
+type checkoutResponse struct {
+	Reference string                `json:"reference"`
+	Status    string                `json:"status"`
+	TotalCOP  int64                 `json:"total_cop"`
+	TotalUSD  float64               `json:"total_usd"`
+	ExpiresAt string                `json:"expires_at"`
+	Bold      *boldCheckoutResponse `json:"bold"`
+}
+
+// CreateCheckout deja listo el pago en línea: valida el pedido, retiene el
+// stock y devuelve los datos para abrir el modal de la pasarela.
+//
+// NO registra ningún pedido. La respuesta lleva la referencia del checkout (el
+// order-id de Bold) con la que se puede consultar el estado del pago después.
+//
+//	@Summary      Preparar el pago en línea (checkout de la pasarela)
+//	@Tags         sales
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        body  body      confirmSaleRequest  true  "Datos del pedido"
+//	@Success      201   {object}  checkoutResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Failure      503   {object}  object{error=string}
+//	@Router       /sales/checkout [post]
+func (h *SaleHandler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var body confirmSaleRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	body.PaymentMethod = sale.PaymentBold
+
+	result, err := h.checkout.Execute(r.Context(),
+		confirmInputFromRequest(r, user, body, user.Role != auth.RoleCustomer),
+		body.ReservationIDs)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+
+	JSON(w, http.StatusCreated, checkoutResponse{
+		Reference: result.Checkout.Reference,
+		Status:    result.Checkout.Status,
+		TotalCOP:  result.Checkout.TotalCOP,
+		TotalUSD:  result.Checkout.TotalUSD,
+		ExpiresAt: formatTime(result.Checkout.ExpiresAt),
+		Bold:      newBoldCheckoutResponse(result.Bold),
+	})
+}
+
+// respondSaleError traduce los errores del dominio de ventas a respuestas HTTP.
+func respondSaleError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, sale.ErrEmptyCart):
+		Error(w, http.StatusBadRequest, "el carrito no tiene items para confirmar")
+	case errors.Is(err, sale.ErrInvalidInput):
+		Error(w, http.StatusBadRequest, "datos de la venta inválidos")
+	case errors.Is(err, sale.ErrReservationExpired):
+		Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, sale.ErrPaymentNotFound):
+		Error(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, sale.ErrForbidden):
+		Error(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, payment.ErrNotConfigured):
+		Error(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, payment.ErrAmountTooLow):
+		Error(w, http.StatusBadRequest, err.Error())
+	default:
+		Error(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+type checkPaymentRequest struct {
+	Reference string `json:"reference"`
+}
+
+// paymentStatusResponse es el estado de un pago. `sale` solo viene cuando el
+// pago entró: hasta entonces no existe ningún pedido.
+type paymentStatusResponse struct {
+	Reference string        `json:"reference"`
+	Status    string        `json:"status"`
+	Sale      *saleResponse `json:"sale,omitempty"`
+}
+
+// CheckPaymentStatus consulta a la pasarela si el pago de un checkout ya entró.
+// Si entró, el pedido se crea en el backend y se devuelve en `sale`.
+//
+// El frontend la llama al volver del checkout; es idempotente, así que se puede
+// repetir sin miedo.
+//
+//	@Summary      Validar el pago de un checkout
+//	@Tags         sales
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        body  body      checkPaymentRequest  true  "Referencia del pago"
+//	@Success      200   {object}  paymentStatusResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      403   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Router       /sales/payment-status [post]
+func (h *SaleHandler) CheckPaymentStatus(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var body checkPaymentRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+
+	status, err := h.checkStatus.Execute(r.Context(), user.ID, body.Reference, canSeeAllSales(user))
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+
+	resp := paymentStatusResponse{Reference: status.Reference, Status: status.Status}
+	if status.Sale != nil {
+		s := newSaleResponse(*status.Sale)
+		resp.Sale = &s
+	}
+	JSON(w, http.StatusOK, resp)
 }
 
 // ListSales devuelve el historial de pedidos SOLO del usuario autenticado
@@ -250,11 +465,11 @@ type statBucketResponse struct {
 }
 
 type salesStatsResponse struct {
-	Period   string              `json:"period"`
+	Period   string               `json:"period"`
 	Buckets  []statBucketResponse `json:"buckets"`
-	Orders   int                 `json:"orders"`
-	TotalCOP int64               `json:"total_cop"`
-	TotalUSD float64             `json:"total_usd"`
+	Orders   int                  `json:"orders"`
+	TotalCOP int64                `json:"total_cop"`
+	TotalUSD float64              `json:"total_usd"`
 }
 
 // SalesStats devuelve un dashboard de ventas agregadas por día (period=day)

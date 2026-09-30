@@ -358,6 +358,29 @@ func (r *ReservationRepository) Confirm(ctx context.Context, userID string, ids 
 	return tx.Commit(ctx)
 }
 
+// ExtendExpiry renueva la ventana de las reservas activas indicadas a
+// `minutes` a partir de ahora. Es el mecanismo con el que la retención de 5
+// minutos del carrito se convierte en la de 30 minutos cuando el cliente pasa
+// al pago con Bold: si alguna de las reservas ya no está activa devuelve
+// reservation.ErrNotFound.
+func (r *ReservationRepository) ExtendExpiry(ctx context.Context, userID string, ids []int64, minutes int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE cart_reservations
+		SET expires_at = now() + make_interval(mins => $3)
+		WHERE user_id = $1 AND id = ANY($2) AND status = 'active'
+	`, userID, ids, minutes)
+	if err != nil {
+		return fmt.Errorf("extender reservas: %w", err)
+	}
+	if int(tag.RowsAffected()) != len(ids) {
+		return reservation.ErrNotFound
+	}
+	return nil
+}
+
 func (r *ReservationRepository) Remove(ctx context.Context, userID string, id int64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {

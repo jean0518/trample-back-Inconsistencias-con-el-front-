@@ -24,6 +24,7 @@ type Handlers struct {
 	AdminUsers     *AdminUserHandler
 	Dashboard      *DashboardHandler
 	Webhook        *WebhookHandler
+	Payments       *BoldWebhookHandler
 	Inventory      *InventoryHandler
 	CardImages     *CardImageHandler
 	AuthMiddleware *AuthMiddleware
@@ -80,6 +81,7 @@ func NewRouter(h Handlers) http.Handler {
 
 	// Webhooks externos — sin auth JWT, la firma HMAC actúa como control de acceso
 	r.Post("/webhooks/scrydex", h.Webhook.HandleScrydex)
+	r.Post("/webhooks/bold", h.Payments.HandleBold)
 
 	r.Get("/games", h.Games.List)
 	r.Get("/expansions", h.Games.ListExpansions)
@@ -154,8 +156,14 @@ func NewRouter(h Handlers) http.Handler {
 	// Sales — registro local de ventas/pedidos e historial
 	r.Route("/sales", func(r chi.Router) {
 		r.Use(h.AuthMiddleware.RequireAuth)
+		// Ventas ya pagadas (efectivo o transferencia).
 		r.Post("/", h.Sales.ConfirmSale)
 		r.Get("/", h.Sales.ListSales)
+		// Pago en línea: prepara el checkout de la pasarela. NO crea el pedido;
+		// el pedido nace cuando la pasarela confirma que el pago entró.
+		r.Post("/checkout", h.Sales.CreateCheckout)
+		// Validación del pago: consulta a la pasarela y, si entró, crea el pedido.
+		r.Post("/payment-status", h.Sales.CheckPaymentStatus)
 	})
 
 	// Admin — sincronización e importación (todo el staff del panel)

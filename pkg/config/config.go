@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -22,6 +23,17 @@ type Config struct {
 	SupabaseStorageBucket  string
 	TelegramBotToken       string
 	TelegramChatID         string
+
+	// Bold — pagos en línea. Opcionales: sin llave de identidad el checkout en
+	// línea queda desactivado y la tienda sigue funcionando con efectivo y
+	// transferencia.
+	BoldIdentityKey        string
+	BoldSecretKey          string
+	BoldEnv                string
+	BoldAPIBaseURL         string
+	BoldPaymentHoldMinutes int
+	// URL del frontend a la que Bold redirige tras el pago (…/carrito).
+	FrontendURL string
 }
 
 func Load() (*Config, error) {
@@ -42,6 +54,11 @@ func Load() (*Config, error) {
 	jwtSecret, err := require("JWT_SECRET")
 	if err != nil {
 		return nil, err
+	}
+
+	holdMinutes, err := strconv.Atoi(envOr("BOLD_PAYMENT_HOLD_MINUTES", "30"))
+	if err != nil || holdMinutes <= 0 {
+		holdMinutes = 30
 	}
 
 	rawOrigins := envOr("ALLOWED_ORIGINS", "http://localhost:5173")
@@ -68,6 +85,15 @@ func Load() (*Config, error) {
 		// no avisa por Telegram.
 		TelegramBotToken: envOr("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:   envOr("TELEGRAM_CHAT_ID", ""),
+		// Bold — pagos en línea. En el ambiente de pruebas la llave secreta de
+		// webhook va vacía, así que no se exige. `BoldEnv` distingue test de
+		// producción para las validaciones del webhook.
+		BoldIdentityKey:        envOr("BOLD_IDENTITY_KEY", ""),
+		BoldSecretKey:          envOr("BOLD_SECRET_KEY", ""),
+		BoldEnv:                envOr("BOLD_ENV", "test"),
+		BoldAPIBaseURL:         envOr("BOLD_API_BASE_URL", "https://payments.api.bold.co"),
+		BoldPaymentHoldMinutes: holdMinutes,
+		FrontendURL:            envOr("FRONTEND_URL", "http://localhost:5173"),
 	}, nil
 }
 

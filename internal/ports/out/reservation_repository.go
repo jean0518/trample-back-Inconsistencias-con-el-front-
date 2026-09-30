@@ -21,6 +21,12 @@ type ReservationRepository interface {
 	ListActiveByUserAndIDs(ctx context.Context, userID string, ids []int64) ([]reservation.Reservation, error)
 	// Confirm marca las reservas indicadas del usuario como 'confirmed'.
 	Confirm(ctx context.Context, userID string, ids []int64) error
+	// ExtendExpiry renueva la ventana de las reservas activas indicadas del
+	// usuario a `minutes` a partir de ahora. Se usa al pasar al pago con Bold:
+	// la reserva del carrito (5 min) se convierte en una retención de 30 min
+	// mientras el cliente paga en la pasarela. Devuelve reservation.ErrNotFound
+	// si alguna reserva indicada ya no está activa.
+	ExtendExpiry(ctx context.Context, userID string, ids []int64, minutes int) error
 	// Remove libera una reserva activa del usuario (el stock queda disponible
 	// de nuevo para otros clientes; el inventario no se modifica). Devuelve
 	// reservation.ErrNotFound si la reserva no existe, no pertenece al usuario

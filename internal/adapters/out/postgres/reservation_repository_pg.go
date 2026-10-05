@@ -72,8 +72,16 @@ func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardI
 		query += ` AND LOWER(cv.variant_name) = LOWER($3)`
 		args = append(args, variantName)
 	}
+	// Primero los listings que todavía tienen unidades sin reservar y, entre ellos,
+	// el de más stock (criterio estable: sumar otra unidad cae en la misma línea
+	// del carrito). Si el de más stock ya está reservado por completo, se usa otro
+	// de la misma carta e idioma en vez de responder "stock insuficiente".
 	query += `
-		ORDER BY il.quantity DESC, il.id ASC
+		ORDER BY (il.quantity - COALESCE((
+		              SELECT SUM(cr.quantity) FROM cart_reservations cr
+		              WHERE cr.listing_id = il.id AND cr.status = 'active'
+		          ), 0)) > 0 DESC,
+		         il.quantity DESC, il.id ASC
 		LIMIT 1
 	`
 	row := r.db.QueryRow(ctx, query, args...)
@@ -164,13 +172,19 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 		VALUES ($1, $2, $3, $4, 'active')
 		ON CONFLICT (user_id, listing_id) WHERE status = 'active'
 		DO UPDATE SET quantity = cart_reservations.quantity + EXCLUDED.quantity,
-		              expires_at = EXCLUDED.expires_at
+		              expires_at = GREATEST(cart_reservations.expires_at, EXCLUDED.expires_at)
 		RETURNING id, listing_id, quantity, expires_at
 	`, input.UserID, info.ListingID, input.Quantity, expiresAt).Scan(
 		&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 	)
 	if err != nil {
 		return reservation.Reservation{}, fmt.Errorf("crear/incrementar reserva: %w", err)
+	}
+	// GREATEST: si la línea ya sostiene un pago en curso, su retención (30 min) es
+	// más larga que la del carrito (5 min) y sumar una unidad no debe acortarla.
+	// Si cambió la cantidad, el pago abierto ya no corresponde al carrito.
+	if err := closeCheckoutsHoldingTx(ctx, tx, res.ID); err != nil {
+		return reservation.Reservation{}, err
 	}
 
 	// El inventario NO se descuenta aquí: la carta se consume al confirmarse
@@ -221,7 +235,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID str
 		JOIN inventory_listings il ON il.id = cr.listing_id
 		JOIN card_variants lcv ON lcv.id = il.variant_id
 		JOIN cards c ON c.id = lcv.card_id
-		WHERE cr.user_id = $1 AND cr.status = 'active'
+		WHERE cr.user_id = $1 AND cr.status = 'active' AND cr.expires_at > now()
 		ORDER BY cr.created_at DESC
 	`, userID)
 	if err != nil {
@@ -290,6 +304,18 @@ func (r *ReservationRepository) Confirm(ctx context.Context, userID string, ids 
 	}
 	defer tx.Rollback(ctx)
 
+	if err := confirmReservationsStrictTx(ctx, tx, userID, ids); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// confirmReservationsStrictTx confirma TODAS las reservas del usuario indicadas y
+// registra el historial 'sold'. Si alguna ya no está activa devuelve
+// reservation.ErrNotFound sin tocar ninguna. Lo comparten Confirm y el registro de
+// ventas en efectivo/transferencia, para que la confirmación y la venta ocurran en
+// la misma transacción.
+func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, ids []int64) error {
 	rows, err := tx.Query(ctx, `
 		SELECT cr.id, cr.quantity,
 		       c.id, c.name, cv.variant_name, il.language, il.price_usd, il.price_cop
@@ -355,7 +381,7 @@ func (r *ReservationRepository) Confirm(ctx context.Context, userID string, ids 
 		}
 	}
 
-	return tx.Commit(ctx)
+	return nil
 }
 
 // ExtendExpiry renueva la ventana de las reservas activas indicadas a
@@ -415,6 +441,11 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID string, id in
 		UPDATE cart_reservations SET status = 'released' WHERE id = $1
 	`, id); err != nil {
 		return fmt.Errorf("liberar reserva: %w", err)
+	}
+	// Quitar una carta cambia el total: el pago abierto que la incluía ya no
+	// corresponde al carrito y no debe poder cobrarse con el monto anterior.
+	if err := closeCheckoutsHoldingTx(ctx, tx, id); err != nil {
+		return err
 	}
 
 	// El inventario no se restaura: nunca se descontó al reservar (la carta
@@ -508,6 +539,20 @@ func (r *ReservationRepository) ReleaseExpired(ctx context.Context) (int64, erro
 		return 0, err
 	}
 	return int64(len(exps)), nil
+}
+
+// closeCheckoutsHoldingTx cierra los checkouts abiertos que incluyen la reserva
+// indicada. Se llama cuando el cliente modifica esa línea del carrito (cambia su
+// cantidad o la quita): el monto que Bold iba a cobrar quedó desactualizado.
+// No libera reservas; el siguiente "Pagar" crea un checkout con el carrito nuevo.
+func closeCheckoutsHoldingTx(ctx context.Context, tx pgx.Tx, reservationID int64) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE payment_checkouts SET status = 'expired'
+		WHERE status = 'open' AND $1 = ANY(reservation_ids)
+	`, reservationID); err != nil {
+		return fmt.Errorf("cerrar checkouts de la reserva %d: %w", reservationID, err)
+	}
+	return nil
 }
 
 // logReservation registra un cambio de estado de una reserva en el historial.

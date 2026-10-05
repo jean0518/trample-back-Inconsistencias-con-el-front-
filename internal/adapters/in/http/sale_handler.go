@@ -303,7 +303,8 @@ func respondSaleError(w http.ResponseWriter, err error) {
 		Error(w, http.StatusBadRequest, "el carrito no tiene items para confirmar")
 	case errors.Is(err, sale.ErrInvalidInput):
 		Error(w, http.StatusBadRequest, "datos de la venta inválidos")
-	case errors.Is(err, sale.ErrReservationExpired):
+	case errors.Is(err, sale.ErrReservationExpired), errors.Is(err, sale.ErrCheckoutConflict),
+		errors.Is(err, sale.ErrInsufficientStock):
 		Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, sale.ErrPaymentNotFound):
 		Error(w, http.StatusNotFound, err.Error())
@@ -314,7 +315,7 @@ func respondSaleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, payment.ErrAmountTooLow):
 		Error(w, http.StatusBadRequest, err.Error())
 	default:
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 	}
 }
 
@@ -325,9 +326,12 @@ type checkPaymentRequest struct {
 // paymentStatusResponse es el estado de un pago. `sale` solo viene cuando el
 // pago entró: hasta entonces no existe ningún pedido.
 type paymentStatusResponse struct {
-	Reference string        `json:"reference"`
-	Status    string        `json:"status"`
-	Sale      *saleResponse `json:"sale,omitempty"`
+	Reference string `json:"reference"`
+	Status    string `json:"status"`
+	// GatewayStatus aparece cuando el último intento fue rechazado: el checkout
+	// sigue "open" (se puede reintentar) pero el frontend debe avisar del fallo.
+	GatewayStatus string        `json:"gateway_status,omitempty"`
+	Sale          *saleResponse `json:"sale,omitempty"`
 }
 
 // CheckPaymentStatus consulta a la pasarela si el pago de un checkout ya entró.
@@ -367,7 +371,7 @@ func (h *SaleHandler) CheckPaymentStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := paymentStatusResponse{Reference: status.Reference, Status: status.Status}
+	resp := paymentStatusResponse{Reference: status.Reference, Status: status.Status, GatewayStatus: status.GatewayStatus}
 	if status.Sale != nil {
 		s := newSaleResponse(*status.Sale)
 		resp.Sale = &s
@@ -402,7 +406,7 @@ func (h *SaleHandler) ListSales(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.list.MySales(r.Context(), user.ID, limit, offset)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 
@@ -445,7 +449,7 @@ func (h *SaleHandler) ListAdminSales(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.list.AllSales(r.Context(), limit, offset)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 
@@ -497,7 +501,7 @@ func (h *SaleHandler) SalesStats(w http.ResponseWriter, r *http.Request) {
 
 	bucketsList, err := h.stats.Stats(r.Context(), period, buckets)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 

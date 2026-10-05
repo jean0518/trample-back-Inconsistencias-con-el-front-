@@ -63,7 +63,8 @@ type CreateCheckoutResult struct {
 // Si el cliente ya tenía un checkout abierto para ese mismo carrito (abrió el
 // modal, lo cerró y volvió a pulsar Pagar), se devuelve ese mismo con la misma
 // referencia: así Bold no ve dos pedidos para la misma compra. Los checkouts
-// abiertos que no correspondan al carrito actual se cierran y liberan su stock.
+// abiertos que no correspondan al carrito actual se cierran, conservando las
+// reservas del carrito.
 func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.ConfirmInput, ids []int64) (CreateCheckoutResult, error) {
 	if len(ids) == 0 {
 		return CreateCheckoutResult{}, sale.ErrEmptyCart
@@ -71,6 +72,7 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 	if !uc.gateway.Configured() {
 		return CreateCheckoutResult{}, payment.ErrNotConfigured
 	}
+	input = normalizeFulfillment(input)
 	if err := validateFulfillment(input); err != nil {
 		return CreateCheckoutResult{}, err
 	}
@@ -89,11 +91,14 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		return CreateCheckoutResult{}, err
 	}
 
-	reuse := err == nil &&
-		checkout.ExpiresAt.After(now) &&
-		checkout.Fulfillment == input.Fulfillment &&
-		checkout.TotalCOP == cart.totalCOP &&
-		sameReservations(checkout.ReservationIDs, ids)
+	// matches indica si un checkout abierto corresponde a este mismo carrito.
+	matches := func(c sale.CheckoutIntent) bool {
+		return c.ExpiresAt.After(now) &&
+			c.Fulfillment == input.Fulfillment &&
+			c.TotalCOP == cart.totalCOP &&
+			sameReservations(c.ReservationIDs, ids)
+	}
+	reuse := err == nil && matches(checkout)
 
 	if reuse {
 		// Se renueva la ventana completa: el stock queda retenido y el checkout
@@ -108,18 +113,19 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		checkout, err = uc.sales.ExtendCheckout(ctx, checkout.Reference, expiresAt)
 		if err != nil {
 			// El checkout se cerró entre la lectura y ahora; se vuelve a crear.
-			checkout, err = uc.newCheckout(ctx, input, cart, ids, now)
+			checkout, err = uc.createOrJoin(ctx, input, cart, ids, now, matches)
 			if err != nil {
 				return CreateCheckoutResult{}, err
 			}
 		}
 	} else {
 		// El carrito cambió (o el checkout anterior venció): los checkouts
-		// abiertos se cierran y devuelven su stock antes de crear el nuevo.
+		// abiertos se cierran antes de crear el nuevo. Sus reservas no se
+		// liberan, porque son las mismas que sostienen el carrito actual.
 		if _, err := uc.sales.CloseOpenCheckouts(ctx, input.UserID); err != nil {
 			return CreateCheckoutResult{}, err
 		}
-		checkout, err = uc.newCheckout(ctx, input, cart, ids, now)
+		checkout, err = uc.createOrJoin(ctx, input, cart, ids, now, matches)
 		if err != nil {
 			return CreateCheckoutResult{}, err
 		}
@@ -129,6 +135,29 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		Checkout: checkout,
 		Bold:     uc.gateway.BuildCheckout(uc.checkoutRequest(checkout, input)),
 	}, nil
+}
+
+// createOrJoin crea el checkout nuevo. Si otro "Pagar" simultáneo del mismo
+// usuario ganó la carrera (el índice único permite un solo checkout abierto por
+// usuario), se une a ese en vez de fallar, siempre que corresponda al mismo
+// carrito; si no, devuelve sale.ErrCheckoutConflict para que el cliente reintente.
+func (uc *CreateCheckoutUseCase) createOrJoin(
+	ctx context.Context,
+	input sale.ConfirmInput,
+	cart pricedCart,
+	ids []int64,
+	now time.Time,
+	matches func(sale.CheckoutIntent) bool,
+) (sale.CheckoutIntent, error) {
+	checkout, err := uc.newCheckout(ctx, input, cart, ids, now)
+	if !errors.Is(err, sale.ErrCheckoutConflict) {
+		return checkout, err
+	}
+	existing, findErr := uc.sales.FindOpenCheckoutByUser(ctx, input.UserID)
+	if findErr == nil && matches(existing) {
+		return existing, nil
+	}
+	return sale.CheckoutIntent{}, sale.ErrCheckoutConflict
 }
 
 // newCheckout retiene el stock y guarda una intención de pago nueva. El orden
@@ -166,9 +195,11 @@ func (uc *CreateCheckoutUseCase) newCheckout(
 
 // holdStock extiende la ventana de las reservas del carrito para que el stock
 // quede retenido mientras el cliente paga en la pasarela (los 5 minutos del
-// carrito solo aplican antes de pulsar Pagar).
+// carrito solo aplican antes de pulsar Pagar). Dura `paymentGraceMinutes` más
+// que el vencimiento que ve la pasarela, para no soltar el stock de un pago que
+// se aprueba justo al límite.
 func (uc *CreateCheckoutUseCase) holdStock(ctx context.Context, userID string, ids []int64) error {
-	if err := uc.reservations.ExtendExpiry(ctx, userID, ids, uc.holdMinutes); err != nil {
+	if err := uc.reservations.ExtendExpiry(ctx, userID, ids, uc.holdMinutes+paymentGraceMinutes); err != nil {
 		if errors.Is(err, reservation.ErrNotFound) {
 			return sale.ErrReservationExpired
 		}

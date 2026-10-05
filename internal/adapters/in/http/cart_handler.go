@@ -100,7 +100,7 @@ func (h *CartHandler) AddToCart(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusBadRequest, "no hay inventario activo para esta carta e idioma")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *CartHandler) GetCart(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.cart.Cart(r.Context(), user.ID)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 
@@ -166,7 +166,7 @@ func (h *CartHandler) RemoveFromCart(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusNotFound, "reserva no encontrada")
 			return
 		}
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 
@@ -193,7 +193,7 @@ func (h *CartHandler) ListReservationLogs(w http.ResponseWriter, r *http.Request
 
 	logs, err := h.cart.ListLogs(r.Context(), r.URL.Query().Get("status"), limit, offset)
 	if err != nil {
-		Error(w, http.StatusInternalServerError, err.Error())
+		internalError(w, err)
 		return
 	}
 

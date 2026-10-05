@@ -10,10 +10,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	appSale "trample-back/internal/application/sale"
 	"trample-back/internal/domain/payment"
 )
+
+// webhookProcessTimeout acota el procesamiento de una notificación (consulta a la
+// pasarela y transacción de aprobación).
+const webhookProcessTimeout = 20 * time.Second
 
 // BoldWebhookHandler recibe las notificaciones de la pasarela de pagos Bold.
 // La ruta es pública (la pasarela no manda token) y la autenticidad se
@@ -51,9 +56,8 @@ type boldEvent struct {
 	} `json:"data"`
 }
 
-// HandleBold procesa una notificación de pago. Responde 200 de inmediato
-// (Bold exige hacerlo en menos de 2 segundos y reintenta si no) y aplica el
-// cambio de estado en segundo plano.
+// HandleBold procesa una notificación de pago y responde 200 solo cuando el
+// cambio quedó aplicado; si falla responde 500 para que Bold reintente.
 //
 //	@Summary      Webhook de pagos Bold
 //	@Tags         payments
@@ -63,6 +67,7 @@ type boldEvent struct {
 //	@Success      200   {object}  object{status=string}
 //	@Failure      400   {object}  object{error=string}
 //	@Failure      401   {object}  object{error=string}
+//	@Failure      500   {object}  object{error=string}
 //	@Router       /webhooks/bold [post]
 func (h *BoldWebhookHandler) HandleBold(w http.ResponseWriter, r *http.Request) {
 	// La firma se calcula con la llave secreta del ambiente. En pruebas es una
@@ -97,24 +102,38 @@ func (h *BoldWebhookHandler) HandleBold(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Sin id no se puede deduplicar: todos los eventos sin id compartirían la
+	// misma llave y los siguientes se descartarían como duplicados.
+	if ev.ID == "" {
+		Error(w, http.StatusBadRequest, "evento sin id")
+		return
+	}
+
 	evt := payment.Event{
 		ID:        ev.ID,
 		Type:      ev.Type,
 		Reference: ev.Data.Metadata.Reference,
 		PaymentID: ev.Data.PaymentID,
+		AmountCOP: ev.Data.Amount.Total,
 		Status:    boldEventStatus(ev.Type),
 		Raw:       body,
 	}
 
-	bgCtx := context.WithoutCancel(r.Context())
-	go func() {
-		if _, err := h.process.Execute(bgCtx, evt); err != nil {
-			slog.Error("procesar notificación de pago",
-				slog.String("type", evt.Type),
-				slog.String("reference", evt.Reference),
-				slog.Any("error", err))
-		}
-	}()
+	// Se procesa antes de responder. Si falla se responde 500 y Bold reintenta
+	// (hasta 5 veces); responder 200 de inmediato y procesar en segundo plano
+	// perdería el pago si el proceso se cae o la base de datos falla, porque
+	// Bold ya no volvería a intentarlo. El contexto no depende de la conexión: si
+	// Bold se rinde a los 2 s, el pedido se termina de crear igual.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), webhookProcessTimeout)
+	defer cancel()
+	if _, err := h.process.Execute(ctx, evt); err != nil {
+		slog.Error("procesar notificación de pago",
+			slog.String("type", evt.Type),
+			slog.String("reference", evt.Reference),
+			slog.Any("error", err))
+		Error(w, http.StatusInternalServerError, "no se pudo procesar la notificación")
+		return
+	}
 
 	JSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"trample-back/internal/domain/payment"
 	"trample-back/internal/domain/sale"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -29,7 +31,16 @@ func (r *SaleRepository) Create(ctx context.Context, s sale.Sale) (sale.Sale, er
 	}
 	defer tx.Rollback(ctx)
 
-	created, err := insertSale(ctx, tx, s)
+	// La confirmación de las reservas va en la misma transacción que la venta: si
+	// registrar la venta falla, las reservas siguen activas y el cliente no pierde
+	// el carrito.
+	if len(s.ReservationIDs) > 0 {
+		if err := confirmReservationsStrictTx(ctx, tx, s.UserID, s.ReservationIDs); err != nil {
+			return sale.Sale{}, err
+		}
+	}
+
+	created, err := insertSale(ctx, tx, s, true)
 	if err != nil {
 		return sale.Sale{}, err
 	}
@@ -39,12 +50,64 @@ func (r *SaleRepository) Create(ctx context.Context, s sale.Sale) (sale.Sale, er
 	return created, nil
 }
 
+// lockStockTx bloquea los listings de la venta y dice si alguno no tiene las
+// unidades que se van a vender (o ya no existe). Se bloquean en orden de id para
+// que dos ventas simultáneas no se interbloqueen.
+func lockStockTx(ctx context.Context, tx pgx.Tx, items []sale.SaleItem) (bool, error) {
+	need := map[int64]int{}
+	short := false
+	for _, it := range items {
+		if it.ListingID == nil {
+			short = true // el listing se eliminó: no hay de dónde descontar
+			continue
+		}
+		need[*it.ListingID] += it.Quantity
+	}
+	ids := make([]int64, 0, len(need))
+	for id := range need {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	for _, id := range ids {
+		var qty int
+		err := tx.QueryRow(ctx, `SELECT quantity FROM inventory_listings WHERE id = $1 FOR UPDATE`, id).Scan(&qty)
+		if errors.Is(err, pgx.ErrNoRows) {
+			short = true
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("bloquear listing %d: %w", id, err)
+		}
+		if qty < need[id] {
+			short = true
+		}
+	}
+	return short, nil
+}
+
 // insertSale persiste la venta y sus items, y consume el inventario. Solo se
 // llama con ventas ya pagadas: efectivo, transferencia o un pago de la pasarela
 // que el backend acaba de aprobar. Un pago en curso no pasa por aquí.
-func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale) (sale.Sale, error) {
+//
+// Si el inventario ya no alcanza, el modo estricto (efectivo/transferencia, donde
+// todavía no se cobró nada o lo registra el staff) falla con ErrInsufficientStock.
+// El no estricto (pago aprobado: el dinero ya entró) crea la venta igual pero
+// marcada para revisión, en vez de vender cartas que no existen sin que nadie lo vea.
+func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.Sale, error) {
+	short, err := lockStockTx(ctx, tx, s.Items)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	if short {
+		if strict {
+			return sale.Sale{}, sale.ErrInsufficientStock
+		}
+		s.RequiresReview = true
+	}
+
 	created := s
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO sales (user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, payment_reference, bold_payment_id, paid_at, requires_review, reservation_ids)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id, created_at
@@ -178,7 +241,7 @@ func (r *SaleRepository) FindByID(ctx context.Context, id int64) (sale.Sale, err
 const checkoutSelect = `
 	SELECT reference, user_id::text, total_cop, total_usd, shipping_cop, shipping_usd,
 	       fulfillment, address, city, phone, items, reservation_ids, status,
-	       COALESCE(sale_id, 0), bold_payment_id, created_at,
+	       COALESCE(sale_id, 0), COALESCE(bold_payment_id, ''), created_at,
 	       COALESCE(paid_at, to_timestamp(0)), expires_at
 	FROM payment_checkouts
 `
@@ -207,6 +270,13 @@ func (r *SaleRepository) CreateCheckout(ctx context.Context, c sale.CheckoutInte
 		string(items), nullableIDs(c.ReservationIDs), sale.CheckoutOpen, c.ExpiresAt,
 	).Scan(&createdAt)
 	if err != nil {
+		// Índice único parcial: un solo checkout abierto por usuario. Si dos
+		// "Pagar" simultáneos llegan aquí, el segundo pierde y lo resuelve el caso
+		// de uso reutilizando el que ganó.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return sale.CheckoutIntent{}, sale.ErrCheckoutConflict
+		}
 		return sale.CheckoutIntent{}, fmt.Errorf("crear checkout: %w", err)
 	}
 
@@ -218,17 +288,21 @@ func (r *SaleRepository) CreateCheckout(ctx context.Context, c sale.CheckoutInte
 
 // ExtendCheckout corre la expiración de un checkout abierto. Si ya no está
 // abierto (se pagó, falló o venció), no lo toca: devolver el error permite que
-// el caso de uso preparo uno nuevo en vez de resurrectir un pago cerrado.
+// el caso de uso prepare uno nuevo en vez de resucitar un pago cerrado. Es una
+// sola sentencia, así que no puede pisar un cierre que ocurra a la vez.
 func (r *SaleRepository) ExtendCheckout(ctx context.Context, reference string, expiresAt time.Time) (sale.CheckoutIntent, error) {
-	row := r.db.QueryRow(ctx,
-		checkoutSelect+` WHERE reference = $1 AND status = $2 FOR UPDATE`,
-		reference, sale.CheckoutOpen)
-
 	var (
 		c     sale.CheckoutIntent
 		items []byte
 	)
-	err := row.Scan(
+	err := r.db.QueryRow(ctx, `
+		UPDATE payment_checkouts SET expires_at = $3
+		WHERE reference = $1 AND status = $2
+		RETURNING reference, user_id::text, total_cop, total_usd, shipping_cop, shipping_usd,
+		          fulfillment, address, city, phone, items, reservation_ids, status,
+		          COALESCE(sale_id, 0), COALESCE(bold_payment_id, ''), created_at,
+		          COALESCE(paid_at, to_timestamp(0)), expires_at
+	`, reference, sale.CheckoutOpen, expiresAt).Scan(
 		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
 		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
 		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
@@ -239,12 +313,9 @@ func (r *SaleRepository) ExtendCheckout(ctx context.Context, reference string, e
 		}
 		return sale.CheckoutIntent{}, fmt.Errorf("extender checkout %s: %w", reference, err)
 	}
-
-	if _, err := r.db.Exec(ctx,
-		`UPDATE payment_checkouts SET expires_at = $2 WHERE reference = $1`, reference, expiresAt); err != nil {
-		return sale.CheckoutIntent{}, fmt.Errorf("extender checkout %s: %w", reference, err)
+	if err := json.Unmarshal(items, &c.Items); err != nil {
+		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", reference, err)
 	}
-	c.ExpiresAt = expiresAt
 	return c, nil
 }
 
@@ -306,7 +377,7 @@ func (r *SaleRepository) FindOpenCheckoutByUser(ctx context.Context, userID stri
 //
 // Es idempotente porque la pasarela reintenta el mismo evento hasta 5 veces: si
 // el checkout ya estaba pagado se devuelve el pedido que se creó la primera vez.
-func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentID string) (sale.Sale, error) {
+func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentID string, paidCOP int64) (sale.Sale, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return sale.Sale{}, err
@@ -349,6 +420,15 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 	if err != nil {
 		return sale.Sale{}, err
 	}
+	// También se revisa a mano un pago que llega cuando el checkout ya no estaba
+	// abierto (venció, falló o se reemplazó por un carrito nuevo) o cuyo monto no
+	// coincide con el del pedido: el dinero entró, pero algo no es lo esperado.
+	if c.Status != sale.CheckoutOpen {
+		review = true
+	}
+	if paidCOP > 0 && paidCOP != c.TotalCOP {
+		review = true
+	}
 
 	created, err := insertSale(ctx, tx, sale.Sale{
 		UserID:           c.UserID,
@@ -368,7 +448,7 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 		RequiresReview:   review,
 		ReservationIDs:   c.ReservationIDs,
 		Items:            c.Items,
-	})
+	}, false)
 	if err != nil {
 		return sale.Sale{}, err
 	}
@@ -428,63 +508,29 @@ func (r *SaleRepository) RejectPayment(ctx context.Context, reference string) (s
 	return r.FindCheckoutByReference(ctx, reference)
 }
 
-// CloseOpenCheckouts cierra los checkouts abiertos del usuario y devuelve el
-// stock que retinían. Se usa cuando el carrito cambió: el checkout anterior ya
-// no corresponde a lo que el cliente quiere pagar.
+// CloseOpenCheckouts cierra los checkouts abiertos del usuario sin tocar sus
+// reservas. Se usa cuando el carrito cambió: el checkout anterior ya no
+// corresponde a lo que el cliente quiere pagar y se reemplaza por uno nuevo.
+//
+// NO libera las reservas a propósito. Las del checkout anterior casi siempre
+// son las mismas que sostienen el carrito actual (el cliente solo cambió el
+// envío, una cantidad o quitó una línea): liberarlas dejaría el checkout nuevo
+// sin stock y el cliente perdería su carrito. Las líneas que el cliente quitó ya
+// las libera el propio carrito, y las abandonadas vencen solas por su expiración.
 func (r *SaleRepository) CloseOpenCheckouts(ctx context.Context, userID string) (int64, error) {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	rows, err := tx.Query(ctx, `
-		SELECT reference, reservation_ids
-		FROM payment_checkouts
+	tag, err := r.db.Exec(ctx, `
+		UPDATE payment_checkouts SET status = $3
 		WHERE user_id = $1 AND status = $2
-		FOR UPDATE
-	`, userID, sale.CheckoutOpen)
+	`, userID, sale.CheckoutOpen, sale.CheckoutExpired)
 	if err != nil {
-		return 0, fmt.Errorf("buscar checkouts abiertos: %w", err)
+		return 0, fmt.Errorf("cerrar checkouts abiertos: %w", err)
 	}
-	type open struct {
-		reference      string
-		reservationIDs []int64
-	}
-	var list []open
-	for rows.Next() {
-		var o open
-		if err := rows.Scan(&o.reference, &o.reservationIDs); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("escanear checkout abierto: %w", err)
-		}
-		list = append(list, o)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-
-	for _, o := range list {
-		if err := releaseReservationsTx(ctx, tx, o.reservationIDs); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE payment_checkouts SET status = $2 WHERE reference = $1
-		`, o.reference, sale.CheckoutExpired); err != nil {
-			return 0, fmt.Errorf("cerrar checkout abierto: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return int64(len(list)), nil
+	return tag.RowsAffected(), nil
 }
 
 // ExpireCheckouts cierra los checkouts que el cliente no pagó dentro de la
 // ventana de retención y libera el stock que retinían.
-func (r *SaleRepository) ExpireCheckouts(ctx context.Context) (int64, error) {
+func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duration) (int64, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -498,9 +544,9 @@ func (r *SaleRepository) ExpireCheckouts(ctx context.Context) (int64, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT reference, reservation_ids
 		FROM payment_checkouts
-		WHERE status = $1 AND expires_at <= now()
+		WHERE status = $1 AND expires_at <= now() - make_interval(secs => $2)
 		FOR UPDATE
-	`, sale.CheckoutOpen)
+	`, sale.CheckoutOpen, grace.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("buscar checkouts vencidos: %w", err)
 	}
@@ -553,6 +599,58 @@ func (r *SaleRepository) RecordPaymentEvent(ctx context.Context, evt payment.Eve
 		return false, fmt.Errorf("registrar evento de pago: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// ForgetPaymentEvent borra el registro de una notificación que no se pudo
+// procesar, para que el reintento de la pasarela no se descarte como duplicado.
+func (r *SaleRepository) ForgetPaymentEvent(ctx context.Context, eventID string) error {
+	if _, err := r.db.Exec(ctx, `DELETE FROM payment_events WHERE event_id = $1`, eventID); err != nil {
+		return fmt.Errorf("olvidar evento de pago %s: %w", eventID, err)
+	}
+	return nil
+}
+
+// FlagSaleForReview marca para revisión manual la venta de esa referencia.
+func (r *SaleRepository) FlagSaleForReview(ctx context.Context, reference string) error {
+	if _, err := r.db.Exec(ctx, `
+		UPDATE sales SET requires_review = true WHERE payment_reference = $1
+	`, reference); err != nil {
+		return fmt.Errorf("marcar venta %s para revisión: %w", reference, err)
+	}
+	return nil
+}
+
+// unsettledWindow es cuánto tiempo después de cerrarse se sigue preguntando a la
+// pasarela por un checkout no pagado: cubre los pagos que quedan pendientes (PSE)
+// y los reintentos tras un rechazo, sin consultar para siempre.
+const unsettledWindow = "2 hours"
+
+// ListUnsettledCheckouts devuelve las referencias que pueden haberse cobrado sin
+// que el backend lo sepa: abiertos ya vencidos (esperando el margen de gracia) y
+// cerrados por vencimiento o rechazo recientemente.
+func (r *SaleRepository) ListUnsettledCheckouts(ctx context.Context, limit int) ([]string, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT reference
+		FROM payment_checkouts
+		WHERE (status = $1 AND expires_at <= now())
+		   OR (status IN ($2, $3) AND expires_at > now() - interval '`+unsettledWindow+`')
+		ORDER BY expires_at DESC
+		LIMIT $4
+	`, sale.CheckoutOpen, sale.CheckoutExpired, sale.CheckoutFailed, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listar pagos sin resolver: %w", err)
+	}
+	defer rows.Close()
+
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, fmt.Errorf("escanear pago sin resolver: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
 }
 
 // reserveToLogSQL marca las reservas con un estado terminal y deja el registro

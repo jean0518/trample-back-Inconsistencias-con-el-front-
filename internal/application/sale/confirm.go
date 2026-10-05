@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"trample-back/internal/domain/reservation"
@@ -20,11 +21,19 @@ const (
 	// porque el carrito usa 5 minutos y esta ventana debe ser generosa: Bold
 	// deja el link de pago activo 24 horas.
 	defaultHoldMinutes = 30
+	// paymentGraceMinutes es el margen que se agrega a la retención del stock más
+	// allá del vencimiento que ve la pasarela. Bold deja de aceptar pagos nuevos al
+	// vencer, pero uno que ya estaba en curso (PSE, transferencia bancaria) puede
+	// aprobarse minutos después: sin margen, el stock ya se habría liberado.
+	paymentGraceMinutes = 5
 	// minOnlinePaymentCOP es el monto mínimo que acepta la pasarela.
 	minOnlinePaymentCOP = 1000
 	// cartPath es la ruta del frontend a la que Bold redirige tras el pago.
 	cartPath = "/carrito"
 )
+
+// paymentGrace es paymentGraceMinutes como duración.
+const paymentGrace = paymentGraceMinutes * time.Minute
 
 // ConfirmResult es el resultado de registrar una venta ya pagada (efectivo o
 // transferencia).
@@ -55,12 +64,16 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		return ConfirmResult{}, sale.ErrEmptyCart
 	}
 
+	input = normalizeFulfillment(input)
+
 	// Validaciones de pago y entrega.
 	switch input.PaymentMethod {
 	case sale.PaymentCash, sale.PaymentTransfer:
-		// La opción de efectivo (y la de múltiples métodos) es exclusiva del
-		// administrador; el resto de clientes paga en línea o por transferencia.
-		if input.PaymentMethod == sale.PaymentCash && !input.IsAdmin {
+		// Efectivo y transferencia registran una venta ya pagada, así que solo el
+		// staff puede hacerlo: es quien comprueba que el dinero entró. Un cliente
+		// que pudiera elegir "transferencia" obtendría un pedido pagado (y el
+		// inventario descontado) sin pagar; el cliente paga en línea por el checkout.
+		if !input.IsAdmin {
 			return ConfirmResult{}, sale.ErrInvalidInput
 		}
 	case sale.PaymentBold:
@@ -79,33 +92,30 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		return ConfirmResult{}, err
 	}
 
-	// Confirmamos las reservas primero (marcándolas como 'confirmed') y
-	// SOLO después creamos la venta. Si una reserva expiró en el ínterin,
-	// Confirm no la afectará; verificamos que se confirmaron todas.
-	if err := uc.reservations.Confirm(ctx, input.UserID, ids); err != nil {
-		if errors.Is(err, reservation.ErrNotFound) {
-			// Una reserva se canceló o expiró justo ahora (carrera):
-			// no confirmamos el pedido para no cobrar algo no disponible.
-			return ConfirmResult{}, sale.ErrReservationExpired
-		}
-		return ConfirmResult{}, err
-	}
-
+	// Las reservas se confirman dentro de la misma transacción que registra la
+	// venta (Create). Así, si algo falla, no queda un carrito confirmado sin pedido
+	// ni un pedido sin las reservas confirmadas.
 	created, err := uc.sales.Create(ctx, sale.Sale{
-		UserID:        input.UserID,
-		TotalCOP:      cart.totalCOP,
-		TotalUSD:      cart.totalUSD,
-		ShippingCOP:   cart.shippingCOP,
-		ShippingUSD:   cart.shippingUSD,
-		Fulfillment:   input.Fulfillment,
-		Address:       input.Address,
-		City:          input.City,
-		Phone:         input.Phone,
-		PaymentMethod: input.PaymentMethod,
-		Status:        sale.StatusPaid,
-		Items:         cart.items,
+		UserID:         input.UserID,
+		TotalCOP:       cart.totalCOP,
+		TotalUSD:       cart.totalUSD,
+		ShippingCOP:    cart.shippingCOP,
+		ShippingUSD:    cart.shippingUSD,
+		Fulfillment:    input.Fulfillment,
+		Address:        input.Address,
+		City:           input.City,
+		Phone:          input.Phone,
+		PaymentMethod:  input.PaymentMethod,
+		Status:         sale.StatusPaid,
+		Items:          cart.items,
+		ReservationIDs: ids,
 	})
 	if err != nil {
+		if errors.Is(err, reservation.ErrNotFound) {
+			// Una reserva se canceló o expiró justo ahora (carrera): no se
+			// confirma el pedido para no registrar algo no disponible.
+			return ConfirmResult{}, sale.ErrReservationExpired
+		}
 		return ConfirmResult{}, err
 	}
 	return ConfirmResult{Sale: created}, nil
@@ -113,6 +123,9 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 
 // validateFulfillment comprueba la forma de entrega y, si es a domicilio, que
 // vengan los datos de envío requeridos.
+//
+// Espera la entrada ya normalizada (normalizeFulfillment): sin espacios sobrantes,
+// para que "   " no cuente como una dirección.
 func validateFulfillment(input sale.ConfirmInput) error {
 	if input.Fulfillment != sale.FulfillmentPickup && input.Fulfillment != sale.FulfillmentShipping {
 		return sale.ErrInvalidInput
@@ -121,8 +134,42 @@ func validateFulfillment(input sale.ConfirmInput) error {
 		if input.Address == "" || input.City == "" || input.Phone == "" {
 			return sale.ErrInvalidInput
 		}
+		if len(input.Address) > maxAddressLen || len(input.City) > maxCityLen {
+			return sale.ErrInvalidInput
+		}
+		// Un teléfono sin dígitos suficientes no sirve para coordinar la entrega.
+		if n := len(onlyDigits(input.Phone)); n < minPhoneDigits || n > maxPhoneDigits {
+			return sale.ErrInvalidInput
+		}
 	}
 	return nil
+}
+
+const (
+	maxAddressLen  = 200
+	maxCityLen     = 80
+	minPhoneDigits = 7
+	maxPhoneDigits = 15
+)
+
+// normalizeFulfillment recorta los espacios de los datos de entrega y del
+// comprador. Debe aplicarse antes de validar y de guardar el pedido.
+func normalizeFulfillment(in sale.ConfirmInput) sale.ConfirmInput {
+	in.Address = strings.TrimSpace(in.Address)
+	in.City = strings.TrimSpace(in.City)
+	in.Phone = strings.TrimSpace(in.Phone)
+	in.PayerName = strings.TrimSpace(in.PayerName)
+	return in
+}
+
+func onlyDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // pricedCart son los totales y el snapshot de items de un pedido, calculados a
@@ -160,7 +207,10 @@ func priceCart(
 
 	var cart pricedCart
 	for _, it := range active {
-		cart.totalCOP += int64(it.PriceCOP) * int64(it.Quantity)
+		// Se redondea al peso (no se trunca): un precio de 12345.9 se cobra como
+		// 12346, no como 12345.
+		priceCOP := int64(math.Round(it.PriceCOP))
+		cart.totalCOP += priceCOP * int64(it.Quantity)
 		cart.totalUSD += it.PriceUSD * float64(it.Quantity)
 		listingID := it.ListingID
 		cart.items = append(cart.items, sale.SaleItem{
@@ -169,7 +219,7 @@ func priceCart(
 			CardName:  it.CardName,
 			Language:  it.Language,
 			Quantity:  it.Quantity,
-			PriceCOP:  int64(it.PriceCOP),
+			PriceCOP:  priceCOP,
 			PriceUSD:  it.PriceUSD,
 		})
 	}

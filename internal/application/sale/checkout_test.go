@@ -134,8 +134,9 @@ func TestCreateCheckout_RetieneElStock(t *testing.T) {
 		t.Fatalf("ExtendExpiry llamado %d veces, se esperaba 1", len(reservations.extended))
 	}
 	call := reservations.extended[0]
-	if call.minutes != 30 {
-		t.Errorf("retención = %d min, se esperaban 30", call.minutes)
+	// 30 min de ventana de pago + el margen para un pago que se aprueba al límite.
+	if want := 30 + paymentGraceMinutes; call.minutes != want {
+		t.Errorf("retención = %d min, se esperaban %d", call.minutes, want)
 	}
 }
 
@@ -166,7 +167,7 @@ func TestCreateCheckout_ReutilizaElCheckoutAbierto(t *testing.T) {
 }
 
 func TestCreateCheckout_CierraElCheckoutSiCambioElCarrito(t *testing.T) {
-	uc, _, sales, _ := newCheckoutFixture()
+	uc, reservations, sales, _ := newCheckoutFixture()
 
 	first, err := uc.Execute(context.Background(), pickupInput(), []int64{1, 2})
 	if err != nil {
@@ -184,6 +185,12 @@ func TestCreateCheckout_CierraElCheckoutSiCambioElCarrito(t *testing.T) {
 	}
 	if sales.createCalls != 2 {
 		t.Errorf("CreateCheckout llamado %d veces, se esperaban 2", sales.createCalls)
+	}
+	// La reserva 1 sigue en el carrito: el checkout nuevo debe retenerla, no
+	// perderla por haber cerrado el anterior.
+	last := reservations.extended[len(reservations.extended)-1]
+	if len(last.ids) != 1 || last.ids[0] != 1 {
+		t.Errorf("el checkout nuevo retuvo %v, se esperaba [1]", last.ids)
 	}
 }
 
@@ -363,5 +370,46 @@ func TestCreateCheckout_ReferenciasDistintasParaCarritosDistintos(t *testing.T) 
 	}
 	if first.Checkout.Reference == second.Checkout.Reference {
 		t.Error("dos carritos distintos compartieron la misma referencia de pago")
+	}
+}
+
+// Dos "Pagar" simultáneos: el índice único deja pasar solo uno. El otro debe
+// unirse al checkout ganador (mismo carrito) en vez de fallar, y Bold ve una sola
+// referencia.
+func TestCreateCheckout_DosPagarSimultaneosComparteElCheckout(t *testing.T) {
+	uc, _, sales, _ := newCheckoutFixture()
+	sales.raceWinner = &sale.CheckoutIntent{
+		Reference:      "TRM-ganador",
+		UserID:         testUser,
+		Fulfillment:    sale.FulfillmentPickup,
+		TotalCOP:       98000,
+		ReservationIDs: []int64{2, 1},
+		ExpiresAt:      time.Now().Add(20 * time.Minute),
+	}
+
+	result, err := uc.Execute(context.Background(), pickupInput(), []int64{1, 2})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Checkout.Reference != "TRM-ganador" {
+		t.Errorf("referencia = %q, se esperaba la del checkout ganador", result.Checkout.Reference)
+	}
+}
+
+// Si el ganador es de otro carrito, no se puede cobrar con su monto: se responde
+// conflicto para que el cliente reintente.
+func TestCreateCheckout_CarreraConOtroCarritoDevuelveConflicto(t *testing.T) {
+	uc, _, sales, _ := newCheckoutFixture()
+	sales.raceWinner = &sale.CheckoutIntent{
+		Reference:      "TRM-otro",
+		UserID:         testUser,
+		Fulfillment:    sale.FulfillmentPickup,
+		TotalCOP:       1,
+		ReservationIDs: []int64{1},
+		ExpiresAt:      time.Now().Add(20 * time.Minute),
+	}
+
+	if _, err := uc.Execute(context.Background(), pickupInput(), []int64{1, 2}); !errors.Is(err, sale.ErrCheckoutConflict) {
+		t.Fatalf("err = %v, se esperaba ErrCheckoutConflict", err)
 	}
 }

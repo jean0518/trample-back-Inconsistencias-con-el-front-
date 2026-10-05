@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,6 +61,19 @@ func main() {
 	// Pasarela de pagos. Sin BOLD_IDENTITY_KEY el checkout en línea queda
 	// deshabilitado y la tienda sigue funcionando con transferencia/efectivo.
 	boldClient := bold.NewClient(cfg.BoldIdentityKey, cfg.BoldSecretKey, cfg.BoldAPIBaseURL)
+	if boldClient.Configured() && !strings.HasPrefix(cfg.FrontendURL, "https://") {
+		// Bold exige https en la URL de redirección: con http el botón falla en el
+		// navegador con BTN-001 y el cliente no puede pagar.
+		log.Warn("FRONTEND_URL no usa https: el botón de Bold fallará con BTN-001",
+			slog.String("FRONTEND_URL", cfg.FrontendURL))
+	}
+	if boldClient.Configured() && cfg.BoldEnv != "production" {
+		// En este modo el webhook se firma con llave vacía (cualquiera puede
+		// generar la firma). Es correcto para el ambiente de pruebas de Bold, pero
+		// si ves esto en producción falta BOLD_ENV=production.
+		log.Warn("Bold en modo prueba: las notificaciones no se verifican con la llave secreta",
+			slog.String("BOLD_ENV", cfg.BoldEnv))
+	}
 
 	// Repositorios
 	expansionRepo := postgres.NewExpansionRepository(pool)
@@ -121,8 +135,9 @@ func main() {
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
 	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
 	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient)
-	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo)
+	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo, boldClient)
 	expireCheckoutsUC := appSale.NewExpireCheckoutsUseCase(saleRepo)
+	reconcileCheckoutsUC := appSale.NewReconcileCheckoutsUseCase(saleRepo, checkPaymentUC)
 	dashboardSummaryUC := appDashboard.NewSummaryUseCase(dashboardRepo)
 
 	// Router
@@ -172,6 +187,11 @@ func main() {
 	// Cierra los pagos en línea que el cliente nunca llegó a completar dentro de
 	// la ventana de retención, devolviendo el stock reservado.
 	go expireCheckoutsLoop(log, expireCheckoutsUC)
+
+	// Pregunta a la pasarela por los pagos que pudieron cobrarse sin que el
+	// backend se enterara (webhook perdido o servidor reiniciado a mitad de
+	// proceso). Corre más seguido que el margen de gracia del stock.
+	go reconcileCheckoutsLoop(bgCtx, log, reconcileCheckoutsUC)
 
 	go func() {
 		log.Info("server starting", slog.String("port", cfg.Port))
@@ -240,6 +260,31 @@ func releaseExpiredLoop(log *slog.Logger, repo *postgres.ReservationRepository) 
 		}
 		if n > 0 {
 			log.Info("reservas expiradas liberadas", slog.Int64("count", n))
+		}
+	}
+}
+
+// reconcileCheckoutsLoop recupera los pagos aprobados en la pasarela que no
+// llegaron por webhook: los pedidos se crean aunque el cliente nunca vuelva al
+// carrito.
+func reconcileCheckoutsLoop(ctx context.Context, log *slog.Logger, reconcile *appSale.ReconcileCheckoutsUseCase) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		runCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		n, err := reconcile.Execute(runCtx)
+		cancel()
+		if err != nil {
+			log.Error("reconciliar pagos con la pasarela", slog.Any("error", err))
+			continue
+		}
+		if n > 0 {
+			log.Warn("pagos recuperados por reconciliación", slog.Int("count", n))
 		}
 	}
 }

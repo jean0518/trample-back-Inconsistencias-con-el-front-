@@ -11,6 +11,15 @@ var ErrReservationExpired = errors.New("una o más reservas del carrito expiraro
 var ErrPaymentNotFound = errors.New("no hay una venta con esa referencia de pago")
 var ErrForbidden = errors.New("no tienes acceso a esa venta")
 
+// ErrInsufficientStock se devuelve cuando, al registrar la venta, un listing ya no
+// tiene las unidades que se iban a vender (alguien editó el inventario mientras
+// la carta estaba reservada).
+var ErrInsufficientStock = errors.New("una o más cartas ya no tienen stock suficiente")
+
+// ErrCheckoutConflict se devuelve cuando ya existe un pago abierto para el
+// usuario y no corresponde a este carrito (dos "Pagar" simultáneos).
+var ErrCheckoutConflict = errors.New("ya hay un pago en curso, inténtalo de nuevo en un momento")
+
 const (
 	FulfillmentPickup   = "pickup"
 	FulfillmentShipping = "shipping"
@@ -126,7 +135,12 @@ type PaymentStatus struct {
 	Reference string
 	// Status es uno de los estados de CheckoutIntent.
 	Status string
-	Sale   *Sale
+	// GatewayStatus es el último estado que informó la pasarela cuando no se
+	// refleja en Status: un intento rechazado deja el checkout abierto (el cliente
+	// puede reintentar con otra tarjeta), pero el frontend necesita saber que el
+	// intento falló. Vacío si no aporta nada.
+	GatewayStatus string
+	Sale          *Sale
 }
 
 // ConfirmInput describe los datos necesarios para registrar una venta local.

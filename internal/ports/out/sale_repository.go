@@ -38,23 +38,41 @@ type SaleRepository interface {
 	// ApprovePayment convierte el checkout en una venta: inserta el pedido y
 	// sus items, confirma sus reservas y consume el inventario, todo en una
 	// sola transacción. Es idempotente: si el pago ya se había aplicado, no
-	// cambia nada. Si el checkout ya había expirado, la venta se crea igual pero
-	// marcada RequiresReview (pago tardío: el stock ya se liberó).
-	ApprovePayment(ctx context.Context, reference, paymentID string) (sale.Sale, error)
+	// cambia nada. La venta se crea marcada RequiresReview cuando el pago no
+	// llegó en condiciones normales: el checkout ya no estaba abierto (expiró,
+	// falló o se reemplazó), el stock ya se había liberado, o `paidCOP` (el monto
+	// que la pasarela cobró, 0 si se desconoce) no coincide con el total del pedido.
+	ApprovePayment(ctx context.Context, reference, paymentID string, paidCOP int64) (sale.Sale, error)
 	// RejectPayment marca el checkout como fallido y libera sus reservas para
 	// que el stock vuelva a estar disponible. Nunca crea una venta.
 	RejectPayment(ctx context.Context, reference string) (sale.CheckoutIntent, error)
-	// CloseOpenCheckouts cierra todos los checkouts abiertos del usuario y
-	// libera el stock que retinían. Se llama cuando el carrito cambió y el
-	// checkout anterior dejó de servir. Devuelve cuántos cerró.
+	// CloseOpenCheckouts cierra todos los checkouts abiertos del usuario SIN
+	// liberar sus reservas: se llama cuando el carrito cambió y el checkout
+	// anterior dejó de servir, y esas mismas reservas sostendrán el nuevo.
+	// Devuelve cuántos cerró.
 	CloseOpenCheckouts(ctx context.Context, userID string) (int64, error)
-	// ExpireCheckouts cierra los checkouts que el cliente no pagó dentro de la
-	// ventana de retención y libera sus reservas. Devuelve cuántos cerró.
-	ExpireCheckouts(ctx context.Context) (int64, error)
+	// ExpireCheckouts cierra los checkouts que el cliente no pagó una vez
+	// pasada la ventana de retención más `grace`, y libera sus reservas. El
+	// margen deja terminar los pagos que ya estaban en curso al vencer (p. ej.
+	// PSE). Devuelve cuántos cerró.
+	ExpireCheckouts(ctx context.Context, grace time.Duration) (int64, error)
+	// ListUnsettledCheckouts devuelve las referencias de los pagos que todavía
+	// pueden haberse cobrado sin que lo sepamos: abiertos ya vencidos, y cerrados
+	// por vencimiento o rechazo en las últimas horas. Es la entrada de la
+	// reconciliación con la pasarela.
+	ListUnsettledCheckouts(ctx context.Context, limit int) ([]string, error)
 
 	// RecordPaymentEvent guarda una notificación de la pasarela. Devuelve true
 	// si es la primera vez que se ve (idempotencia); false si ya existía.
 	RecordPaymentEvent(ctx context.Context, evt payment.Event) (bool, error)
+	// ForgetPaymentEvent borra el registro de una notificación cuyo procesamiento
+	// falló, para que el reintento de la pasarela se trate como la primera vez y
+	// no se descarte como duplicado.
+	ForgetPaymentEvent(ctx context.Context, eventID string) error
+	// FlagSaleForReview marca para revisión manual la venta de esa referencia de
+	// pago (p. ej. una anulación de un pago ya aprobado). No hace nada si el pago
+	// no llegó a ser venta.
+	FlagSaleForReview(ctx context.Context, reference string) error
 
 	// FindByID devuelve una venta con sus items. Se usa para leer el pedido que
 	// dejó ApprovePayment, cuya referencia ya solo vive en el checkout.

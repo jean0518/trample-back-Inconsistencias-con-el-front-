@@ -16,6 +16,11 @@ var ErrNotConfigured = errors.New("la pasarela de pagos no está configurada")
 // mínimo que acepta la pasarela (Bold exige al menos 1000 COP).
 var ErrAmountTooLow = errors.New("el monto mínimo para pagar en línea es de 1000 COP")
 
+// ErrNotConfirmed se devuelve cuando una notificación dice que el pago entró pero
+// la pasarela, al consultarla, no lo confirma. Es la defensa contra un webhook
+// falsificado o que llegó antes de que la transacción quedara consultable.
+var ErrNotConfirmed = errors.New("la pasarela no confirma el pago")
+
 // ProviderBold identifica la pasarela Bold.
 const ProviderBold = "bold"
 
@@ -93,6 +98,8 @@ type Event struct {
 	Type      string
 	Reference string
 	PaymentID string
+	// AmountCOP es el total que la notificación dice haber cobrado (0 si no vino).
+	AmountCOP int64
 	Status    string
 	Raw       []byte
 }

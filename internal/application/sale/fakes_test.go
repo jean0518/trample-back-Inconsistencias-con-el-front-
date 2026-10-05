@@ -95,6 +95,18 @@ type fakeSales struct {
 	approveRefs []string
 	rejectRefs  []string
 	expired     int64
+	expireGrace time.Duration
+	flagged     []string
+	forgotten   []string
+	paidAmounts []int64
+	// confirmedIDs y confirmErr modelan la confirmación de reservas que Create
+	// hace en la misma transacción que la venta.
+	confirmedIDs [][]int64
+	confirmErr   error
+	// raceWinner simula que otro "Pagar" simultáneo ganó el índice único: al
+	// crear el checkout, el repositorio devuelve ErrCheckoutConflict y queda
+	// abierto el del ganador.
+	raceWinner *sale.CheckoutIntent
 }
 
 func newFakeSales() *fakeSales {
@@ -107,6 +119,10 @@ func newFakeSales() *fakeSales {
 }
 
 func (f *fakeSales) Create(_ context.Context, s sale.Sale) (sale.Sale, error) {
+	if f.confirmErr != nil {
+		return sale.Sale{}, f.confirmErr
+	}
+	f.confirmedIDs = append(f.confirmedIDs, s.ReservationIDs)
 	f.nextSaleID++
 	s.ID = f.nextSaleID
 	f.sales[s.ID] = s
@@ -115,6 +131,14 @@ func (f *fakeSales) Create(_ context.Context, s sale.Sale) (sale.Sale, error) {
 
 func (f *fakeSales) CreateCheckout(_ context.Context, c sale.CheckoutIntent) (sale.CheckoutIntent, error) {
 	f.createCalls++
+	if f.raceWinner != nil {
+		w := *f.raceWinner
+		w.Status = sale.CheckoutOpen
+		f.checkouts[w.Reference] = w
+		f.open[w.UserID] = w.Reference
+		f.raceWinner = nil
+		return sale.CheckoutIntent{}, sale.ErrCheckoutConflict
+	}
 	// El repositorio real es quien fija el estado inicial.
 	c.Status = sale.CheckoutOpen
 	f.checkouts[c.Reference] = c
@@ -165,8 +189,9 @@ func (f *fakeSales) CloseOpenCheckouts(_ context.Context, userID string) (int64,
 	return n, nil
 }
 
-func (f *fakeSales) ApprovePayment(_ context.Context, reference, paymentID string) (sale.Sale, error) {
+func (f *fakeSales) ApprovePayment(_ context.Context, reference, paymentID string, paidCOP int64) (sale.Sale, error) {
 	f.approveRefs = append(f.approveRefs, reference)
+	f.paidAmounts = append(f.paidAmounts, paidCOP)
 	if f.approveErr != nil {
 		return sale.Sale{}, f.approveErr
 	}
@@ -188,6 +213,9 @@ func (f *fakeSales) ApprovePayment(_ context.Context, reference, paymentID strin
 		PaymentReference: c.Reference,
 		BoldPaymentID:    paymentID,
 		Items:            c.Items,
+		// Igual que el repositorio real: un pago que llega a un checkout que ya no
+		// estaba abierto, o por otro monto, se revisa a mano.
+		RequiresReview: c.Status != sale.CheckoutOpen || (paidCOP > 0 && paidCOP != c.TotalCOP),
 	}
 	f.sales[s.ID] = s
 	c.Status = sale.CheckoutPaid
@@ -214,7 +242,37 @@ func (f *fakeSales) RejectPayment(_ context.Context, reference string) (sale.Che
 	return c, nil
 }
 
-func (f *fakeSales) ExpireCheckouts(context.Context) (int64, error) { return f.expired, nil }
+func (f *fakeSales) ExpireCheckouts(_ context.Context, grace time.Duration) (int64, error) {
+	f.expireGrace = grace
+	return f.expired, nil
+}
+
+// ListUnsettledCheckouts imita al repositorio: abiertos ya vencidos y cerrados
+// por vencimiento o rechazo.
+func (f *fakeSales) ListUnsettledCheckouts(_ context.Context, limit int) ([]string, error) {
+	var refs []string
+	for ref, c := range f.checkouts {
+		openExpired := c.Status == sale.CheckoutOpen && !c.ExpiresAt.After(time.Now())
+		if openExpired || c.Status == sale.CheckoutExpired || c.Status == sale.CheckoutFailed {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) > limit {
+		refs = refs[:limit]
+	}
+	return refs, nil
+}
+
+func (f *fakeSales) ForgetPaymentEvent(_ context.Context, eventID string) error {
+	f.forgotten = append(f.forgotten, eventID)
+	delete(f.eventIDs, eventID)
+	return nil
+}
+
+func (f *fakeSales) FlagSaleForReview(_ context.Context, reference string) error {
+	f.flagged = append(f.flagged, reference)
+	return nil
+}
 
 func (f *fakeSales) RecordPaymentEvent(_ context.Context, evt payment.Event) (bool, error) {
 	if f.eventIDs[evt.ID] {

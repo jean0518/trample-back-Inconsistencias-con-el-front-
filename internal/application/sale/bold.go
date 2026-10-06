@@ -28,12 +28,19 @@ const (
 // aprobado crea el pedido la primera vez y las siguientes devuelven ese mismo
 // pedido sin duplicarlo.
 type CheckPaymentStatusUseCase struct {
-	sales   out.SaleRepository
-	gateway out.PaymentGateway
+	sales    out.SaleRepository
+	gateway  out.PaymentGateway
+	notifier *PurchaseNotifier
 }
 
 func NewCheckPaymentStatusUseCase(sales out.SaleRepository, gateway out.PaymentGateway) *CheckPaymentStatusUseCase {
 	return &CheckPaymentStatusUseCase{sales: sales, gateway: gateway}
+}
+
+// WithNotifier activa el correo de confirmación al crearse el pedido.
+func (uc *CheckPaymentStatusUseCase) WithNotifier(n *PurchaseNotifier) *CheckPaymentStatusUseCase {
+	uc.notifier = n
+	return uc
 }
 
 // Execute consulta el estado del pago de `reference` y deja todo coherente con
@@ -95,6 +102,7 @@ func (uc *CheckPaymentStatusUseCase) Execute(ctx context.Context, userID, refere
 			return sale.PaymentStatus{}, err
 		}
 		logIfNeedsReview(created)
+		uc.notifier.OrderConfirmed(created)
 		return sale.PaymentStatus{Reference: reference, Status: sale.CheckoutPaid, Sale: &created}, nil
 	case payment.StatusRejected, payment.StatusFailed:
 		// Un intento rechazado NO cierra el checkout: el cliente puede reintentar
@@ -121,12 +129,19 @@ func (uc *CheckPaymentStatusUseCase) Execute(ctx context.Context, userID, refere
 
 // ProcessPaymentEventUseCase aplica una notificación de la pasarela (webhook).
 type ProcessPaymentEventUseCase struct {
-	sales   out.SaleRepository
-	gateway out.PaymentGateway
+	sales    out.SaleRepository
+	gateway  out.PaymentGateway
+	notifier *PurchaseNotifier
 }
 
 func NewProcessPaymentEventUseCase(sales out.SaleRepository, gateway out.PaymentGateway) *ProcessPaymentEventUseCase {
 	return &ProcessPaymentEventUseCase{sales: sales, gateway: gateway}
+}
+
+// WithNotifier activa los correos de pago aprobado, rechazado y anulado.
+func (uc *ProcessPaymentEventUseCase) WithNotifier(n *PurchaseNotifier) *ProcessPaymentEventUseCase {
+	uc.notifier = n
+	return uc
 }
 
 // Execute registra el evento y, solo si es la primera vez que llega, aplica el
@@ -190,11 +205,13 @@ func (uc *ProcessPaymentEventUseCase) apply(ctx context.Context, evt payment.Eve
 			return fmt.Errorf("aprobar pago de %s: %w", evt.Reference, err)
 		}
 		logIfNeedsReview(created)
+		uc.notifier.OrderConfirmed(created)
 	case EventSaleRejected:
 		// Un intento rechazado no cierra el checkout: el cliente puede reintentar
 		// con otra tarjeta y el stock sigue retenido hasta que venza. Liberarlo aquí
 		// dejaría sin cartas a un pago que se aprueba después.
 		slog.Info("intento de pago rechazado", slog.String("reference", evt.Reference))
+		uc.notifyFailure(ctx, evt.Reference, false)
 	case EventVoidApproved:
 		// Una anulación aprobada deja de ser un pago válido. Si el checkout seguía
 		// abierto se libera el stock; si el pedido ya existía, el reembolso es un
@@ -206,10 +223,30 @@ func (uc *ProcessPaymentEventUseCase) apply(ctx context.Context, evt payment.Eve
 			return err
 		}
 		slog.Warn("pago anulado en la pasarela: revisar el pedido", slog.String("reference", evt.Reference))
+		uc.notifyFailure(ctx, evt.Reference, true)
 	case EventVoidRejected:
 		// La anulación falló: el pago sigue vigente. No hay nada que cambiar.
 	}
 	return nil
+}
+
+// notifyFailure avisa al cliente de un pago que salió mal. Si el checkout ya se
+// pagó (un intento rechazado que llega después de uno aprobado) no se avisa: el
+// cliente tiene su pedido y el correo solo lo confundiría. Un fallo al buscarlo
+// no se propaga: el correo es accesorio y no debe hacer reintentar el webhook.
+func (uc *ProcessPaymentEventUseCase) notifyFailure(ctx context.Context, reference string, voided bool) {
+	if uc.notifier == nil {
+		return
+	}
+	c, err := uc.sales.FindCheckoutByReference(ctx, reference)
+	if err != nil {
+		slog.Warn("correo de pago fallido: buscar checkout", slog.String("reference", reference), slog.Any("error", err))
+		return
+	}
+	if c.Status == sale.CheckoutPaid && !voided {
+		return
+	}
+	uc.notifier.PaymentFailed(c.UserID, out.PaymentFailure{Reference: reference, TotalCOP: c.TotalCOP, Voided: voided})
 }
 
 // logIfNeedsReview deja constancia de los pagos aprobados que requieren que una

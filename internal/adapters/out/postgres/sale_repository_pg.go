@@ -108,11 +108,11 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 
 	created := s
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sales (user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, payment_reference, bold_payment_id, paid_at, requires_review, reservation_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		INSERT INTO sales (user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, payment_reference, bold_payment_id, paid_at, requires_review, reservation_ids, pickup_deadline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING id, created_at
 	`, s.UserID, s.TotalCOP, s.TotalUSD, s.ShippingCOP, s.ShippingUSD, s.Fulfillment, s.Address, s.City, s.Phone, s.PaymentMethod, s.Status,
-		nullableStr(s.PaymentReference), nullableStr(s.BoldPaymentID), nullableTime(s.PaidAt), s.RequiresReview, nullableIDs(s.ReservationIDs),
+		nullableStr(s.PaymentReference), nullableStr(s.BoldPaymentID), nullableTime(s.PaidAt), s.RequiresReview, nullableIDs(s.ReservationIDs), nullableTime(s.PickupDeadline),
 	).Scan(&created.ID, &created.CreatedAt)
 	if err != nil {
 		return sale.Sale{}, fmt.Errorf("crear venta: %w", err)
@@ -181,7 +181,7 @@ func nullableIDs(ids []int64) any {
 const saleSelect = `
 	SELECT id, user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, created_at,
 	       COALESCE(payment_reference, ''), COALESCE(bold_payment_id, ''), COALESCE(paid_at, to_timestamp(0)),
-	       requires_review, reservation_ids
+	       requires_review, reservation_ids, COALESCE(pickup_deadline, to_timestamp(0))
 	FROM sales
 `
 
@@ -190,7 +190,7 @@ func scanSale(row pgx.Row) (sale.Sale, error) {
 	err := row.Scan(
 		&s.ID, &s.UserID, &s.TotalCOP, &s.TotalUSD, &s.ShippingCOP, &s.ShippingUSD, &s.Fulfillment, &s.Address,
 		&s.City, &s.Phone, &s.PaymentMethod, &s.Status, &s.CreatedAt,
-		&s.PaymentReference, &s.BoldPaymentID, &s.PaidAt, &s.RequiresReview, &s.ReservationIDs,
+		&s.PaymentReference, &s.BoldPaymentID, &s.PaidAt, &s.RequiresReview, &s.ReservationIDs, &s.PickupDeadline,
 	)
 	return s, err
 }
@@ -464,6 +464,7 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 	if err := tx.Commit(ctx); err != nil {
 		return sale.Sale{}, err
 	}
+	created.JustCreated = true
 	return created, nil
 }
 
@@ -774,7 +775,7 @@ func (r *SaleRepository) Stats(ctx context.Context, period string, since time.Ti
 			COALESCE(sum(total_cop), 0)::bigint AS total_cop,
 			COALESCE(sum(total_usd), 0)::numeric AS total_usd
 		FROM sales
-		WHERE created_at >= $2
+		WHERE created_at >= $2 AND status = 'paid'
 		GROUP BY date_trunc($1, created_at)
 		ORDER BY date_trunc($1, created_at)
 	`, trunc, since)
@@ -792,4 +793,160 @@ func (r *SaleRepository) Stats(ctx context.Context, period string, since time.Ti
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Pedidos de recogida en tienda: se pagan en el local y vencen a los 2 días
+// hábiles. Mientras están pendientes tienen el stock descontado; al cancelarse
+// (a mano o por vencimiento) vuelve al inventario.
+// ---------------------------------------------------------------------------
+
+// lockPendingPickupTx bloquea el pedido y comprueba que siga pendiente de
+// recogida. Devuelve ErrPaymentNotFound si no existe y ErrNotPendingPickup si ya
+// se pagó o canceló, de modo que pagar y cancelar (o el barrido por vencimiento)
+// no puedan pisarse.
+func lockPendingPickupTx(ctx context.Context, tx pgx.Tx, id int64) error {
+	var status string
+	err := tx.QueryRow(ctx, `SELECT status FROM sales WHERE id = $1 FOR UPDATE`, id).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sale.ErrPaymentNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("bloquear pedido %d: %w", id, err)
+	}
+	if status != sale.StatusPendingPickup {
+		return sale.ErrNotPendingPickup
+	}
+	return nil
+}
+
+// cancelPickupTx marca el pedido como cancelado y devuelve sus cartas al
+// inventario. Un listing que la venta dejó en 0 unidades (y por eso 'inactive')
+// vuelve a estar activo; uno desactivado por otra razón conserva su estado.
+func cancelPickupTx(ctx context.Context, tx pgx.Tx, id int64) error {
+	rows, err := tx.Query(ctx, `SELECT listing_id, quantity FROM sale_items WHERE sale_id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("leer items del pedido %d: %w", id, err)
+	}
+	type line struct {
+		listingID int64
+		quantity  int
+	}
+	var lines []line
+	for rows.Next() {
+		var listingID *int64
+		var qty int
+		if err := rows.Scan(&listingID, &qty); err != nil {
+			rows.Close()
+			return fmt.Errorf("escanear item del pedido %d: %w", id, err)
+		}
+		if listingID != nil { // el listing se eliminó: no hay a dónde devolver
+			lines = append(lines, line{*listingID, qty})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	slices.SortFunc(lines, func(a, b line) int { return int(a.listingID - b.listingID) })
+
+	for _, l := range lines {
+		if _, err := tx.Exec(ctx, `
+			UPDATE inventory_listings
+			SET status = CASE WHEN quantity = 0 AND status = 'inactive' THEN 'active' ELSE status END,
+			    quantity = quantity + $2,
+			    updated_at = now()
+			WHERE id = $1
+		`, l.listingID, l.quantity); err != nil {
+			return fmt.Errorf("devolver stock del listing %d: %w", l.listingID, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sales SET status = $2 WHERE id = $1`, id, sale.StatusCancelled); err != nil {
+		return fmt.Errorf("cancelar pedido %d: %w", id, err)
+	}
+	return nil
+}
+
+// MarkPickupPaid registra que el cliente pagó en la tienda.
+func (r *SaleRepository) MarkPickupPaid(ctx context.Context, id int64) (sale.Sale, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockPendingPickupTx(ctx, tx, id); err != nil {
+		return sale.Sale{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sales SET status = $2, paid_at = now() WHERE id = $1`, id, sale.StatusPaid); err != nil {
+		return sale.Sale{}, fmt.Errorf("marcar pedido %d como pagado: %w", id, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sale.Sale{}, err
+	}
+	return r.FindByID(ctx, id)
+}
+
+// CancelPickup cancela un pedido pendiente y devuelve su stock.
+func (r *SaleRepository) CancelPickup(ctx context.Context, id int64) (sale.Sale, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockPendingPickupTx(ctx, tx, id); err != nil {
+		return sale.Sale{}, err
+	}
+	if err := cancelPickupTx(ctx, tx, id); err != nil {
+		return sale.Sale{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sale.Sale{}, err
+	}
+	return r.FindByID(ctx, id)
+}
+
+// ExpirePickups cancela los pedidos pendientes cuyo plazo ya venció y devuelve
+// los que canceló, para avisar a sus clientes. Cada pedido va en su propia
+// transacción: uno que falle no deja sin cancelar a los demás.
+func (r *SaleRepository) ExpirePickups(ctx context.Context, now time.Time) ([]sale.Sale, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id FROM sales
+		WHERE status = $1 AND pickup_deadline IS NOT NULL AND pickup_deadline <= $2
+		ORDER BY id
+	`, sale.StatusPendingPickup, now)
+	if err != nil {
+		return nil, fmt.Errorf("buscar pedidos de recogida vencidos: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("escanear pedido vencido: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var cancelled []sale.Sale
+	var firstErr error
+	for _, id := range ids {
+		s, err := r.CancelPickup(ctx, id)
+		if errors.Is(err, sale.ErrNotPendingPickup) {
+			continue // lo pagaron o cancelaron justo ahora
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("cancelar pedido vencido %d: %w", id, err)
+			}
+			continue
+		}
+		cancelled = append(cancelled, s)
+	}
+	return cancelled, firstErr
 }

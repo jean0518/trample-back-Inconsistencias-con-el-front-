@@ -48,7 +48,7 @@ func (r *DashboardRepository) SalesTotals(ctx context.Context, since, todayStart
 			COALESCE(sum(total_cop), 0)::bigint              AS total_cop,
 			COALESCE(sum(total_usd), 0)::numeric             AS total_usd
 		FROM sales
-		WHERE created_at >= $1
+		WHERE created_at >= $1 AND status = 'paid'
 	`, since, todayStart, todayStart.AddDate(0, 0, -6)).Scan(
 		&t.OrdersToday, &t.OrdersLast7, &t.Orders, &t.TotalCOP, &t.TotalUSD,
 	)
@@ -68,7 +68,7 @@ func (r *DashboardRepository) SalesSeries(ctx context.Context, since time.Time) 
 			COALESCE(sum(total_cop), 0)::bigint                       AS total_cop,
 			COALESCE(sum(total_usd), 0)::numeric                      AS total_usd
 		FROM sales
-		WHERE created_at >= $1
+		WHERE created_at >= $1 AND status = 'paid'
 		GROUP BY date_trunc('day', created_at)
 		ORDER BY date_trunc('day', created_at)
 	`, since)

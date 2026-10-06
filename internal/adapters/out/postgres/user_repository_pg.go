@@ -58,3 +58,13 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (auth.Us
 	}
 	return u, err
 }
+
+func (r *UserRepository) FindByID(ctx context.Context, id string) (auth.User, error) {
+	var u auth.User
+	err := r.db.QueryRow(ctx, userSelect+` WHERE u.id = $1`, id).
+		Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.User{}, auth.ErrUserNotFound
+	}
+	return u, err
+}

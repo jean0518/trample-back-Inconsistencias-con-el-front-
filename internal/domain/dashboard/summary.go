@@ -30,11 +30,11 @@ type Summary struct {
 	// zona horaria del servidor.
 	OrdersToday int `json:"orders_today"`
 	OrdersLast7 int `json:"orders_last7"`
-	// PeriodOrders, PeriodTotalCOP y PeriodTotalUSD resumen la ventana completa
-	// que cubre la serie.
-	PeriodOrders   int     `json:"period_orders"`
-	PeriodTotalCOP int64   `json:"period_total_cop"`
-	PeriodTotalUSD float64 `json:"period_total_usd"`
+	// PeriodOrders y PeriodTotalCOP resumen la ventana completa que cubre la
+	// serie. El panel trabaja solo en COP: los pedidos con productos no tienen
+	// equivalente en USD y sumarlo dejaría el total incompleto.
+	PeriodOrders   int   `json:"period_orders"`
+	PeriodTotalCOP int64 `json:"period_total_cop"`
 
 	// SeriesDays es la cantidad de días que cubre la serie, para que el
 	// frontend sepa cuántas barras dibujar sin contar el arreglo.
@@ -50,10 +50,9 @@ type Summary struct {
 // DayCount es un día de la serie de pedidos.
 type DayCount struct {
 	// Date es el día en formato YYYY-MM-DD, en la zona horaria del servidor.
-	Date     string  `json:"date"`
-	Orders   int     `json:"orders"`
-	TotalCOP int64   `json:"total_cop"`
-	TotalUSD float64 `json:"total_usd"`
+	Date     string `json:"date"`
+	Orders   int    `json:"orders"`
+	TotalCOP int64  `json:"total_cop"`
 }
 
 // KPIs son los tres indicadores de catálogo e inventario.
@@ -70,17 +69,15 @@ type SalesTotals struct {
 	OrdersLast7 int
 	Orders      int
 	TotalCOP    int64
-	TotalUSD    float64
 }
 
 // RecentOrder es la vista mínima de un pedido para la tabla del resumen. No
 // incluye items ni datos de envío porque el resumen solo los muestra como
 // referencia; el detalle se pide al endpoint de ventas.
 type RecentOrder struct {
-	ID       int64   `json:"id"`
-	Status   string  `json:"status"`
-	TotalCOP int64   `json:"total_cop"`
-	TotalUSD float64 `json:"total_usd"`
+	ID       int64  `json:"id"`
+	Status   string `json:"status"`
+	TotalCOP int64  `json:"total_cop"`
 	// Items es la cantidad de renglones del pedido, no de unidades.
 	Items int `json:"items"`
 	// Units es el total de unidades vendidas.

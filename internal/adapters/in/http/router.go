@@ -27,6 +27,8 @@ type Handlers struct {
 	Payments       *BoldWebhookHandler
 	Inventory      *InventoryHandler
 	CardImages     *CardImageHandler
+	Products       *ProductHandler
+	ProductCart    *ProductCartHandler
 	AuthMiddleware *AuthMiddleware
 	AllowedOrigins []string
 }
@@ -91,6 +93,12 @@ func NewRouter(h Handlers) http.Handler {
 	// dejar de cargar porque la carta esté pausada.
 	r.Get("/card-images/{id}", h.CardImages.Get)
 
+	// Productos propios de la tienda (módulo separado de las cartas). Públicos:
+	// solo devuelven los publicados; los ocultos no existen para el cliente.
+	r.Get("/products", h.Products.List)
+	r.Get("/products/{id}", h.Products.Get)
+	r.Get("/product-images/{id}", h.Products.ServeImage)
+
 	r.Route("/auth", func(r chi.Router) {
 		r.Use(httprate.LimitByIP(10, time.Minute))
 		r.Post("/register", h.Auth.Register)
@@ -153,6 +161,12 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.Cart.GetCart)
 		r.Post("/", h.Cart.AddToCart)
 		r.Delete("/{id}", h.Cart.RemoveFromCart)
+
+		// Carrito de productos: mismas reglas de reserva (5 min), rutas aparte
+		// para no tocar el contrato del carrito de cartas.
+		r.Get("/products", h.ProductCart.List)
+		r.Post("/products", h.ProductCart.Add)
+		r.Delete("/products/{id}", h.ProductCart.Remove)
 	})
 
 	// Sales — registro local de ventas/pedidos e historial
@@ -227,6 +241,21 @@ func NewRouter(h Handlers) http.Handler {
 			r.Use(h.AuthMiddleware.RequirePermission(auth.PermInventario))
 			r.Post("/expansions/sync", h.Riftbound.SyncExpansions)
 		})
+	})
+
+	// Admin — productos propios de la tienda. Solo el rol admin: ningún
+	// colaborador los crea ni los edita, tenga el panel que tenga.
+	r.Route("/admin/products", func(r chi.Router) {
+		r.Use(h.AuthMiddleware.RequireAuth)
+		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
+		r.Get("/", h.Products.ListAdmin)
+		r.Post("/", h.Products.Create)
+		r.Get("/{id}", h.Products.GetAdmin)
+		r.Put("/{id}", h.Products.Update)
+		r.Patch("/{id}/status", h.Products.SetStatus)
+		r.Delete("/{id}", h.Products.Delete)
+		r.Post("/{id}/images", h.Products.AddImage)
+		r.Delete("/{id}/images/{imageId}", h.Products.RemoveImage)
 	})
 
 	// Admin — gestión de usuarios colaborador/sup_colaborador

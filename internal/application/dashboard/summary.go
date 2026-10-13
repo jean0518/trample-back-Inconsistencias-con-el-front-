@@ -67,7 +67,6 @@ func (uc *SummaryUseCase) Execute(ctx context.Context, days, recent int) (dashbo
 		OrdersLast7:    totals.OrdersLast7,
 		PeriodOrders:   totals.Orders,
 		PeriodTotalCOP: totals.TotalCOP,
-		PeriodTotalUSD: totals.TotalUSD,
 		SeriesDays:     days,
 		Series:         fillSeries(series, since, days),
 		RecentOrders:   recentOrders,

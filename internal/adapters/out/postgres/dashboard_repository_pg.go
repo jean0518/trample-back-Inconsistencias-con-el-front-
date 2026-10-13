@@ -45,12 +45,11 @@ func (r *DashboardRepository) SalesTotals(ctx context.Context, since, todayStart
 			count(*) FILTER (WHERE created_at >= $2)::int AS orders_today,
 			count(*) FILTER (WHERE created_at >= $3)::int AS orders_last7,
 			count(*)::int                                    AS orders,
-			COALESCE(sum(total_cop), 0)::bigint              AS total_cop,
-			COALESCE(sum(total_usd), 0)::numeric             AS total_usd
+			COALESCE(sum(total_cop), 0)::bigint              AS total_cop
 		FROM sales
 		WHERE created_at >= $1 AND status = 'paid'
 	`, since, todayStart, todayStart.AddDate(0, 0, -6)).Scan(
-		&t.OrdersToday, &t.OrdersLast7, &t.Orders, &t.TotalCOP, &t.TotalUSD,
+		&t.OrdersToday, &t.OrdersLast7, &t.Orders, &t.TotalCOP,
 	)
 	if err != nil {
 		return t, fmt.Errorf("consultar totales de ventas: %w", err)
@@ -65,8 +64,7 @@ func (r *DashboardRepository) SalesSeries(ctx context.Context, since time.Time) 
 		SELECT
 			to_char(date_trunc('day', created_at), 'YYYY-MM-DD')       AS day,
 			count(*)::int                                             AS orders,
-			COALESCE(sum(total_cop), 0)::bigint                       AS total_cop,
-			COALESCE(sum(total_usd), 0)::numeric                      AS total_usd
+			COALESCE(sum(total_cop), 0)::bigint                       AS total_cop
 		FROM sales
 		WHERE created_at >= $1 AND status = 'paid'
 		GROUP BY date_trunc('day', created_at)
@@ -80,7 +78,7 @@ func (r *DashboardRepository) SalesSeries(ctx context.Context, since time.Time) 
 	var out []dashboard.DayCount
 	for rows.Next() {
 		var d dashboard.DayCount
-		if err := rows.Scan(&d.Date, &d.Orders, &d.TotalCOP, &d.TotalUSD); err != nil {
+		if err := rows.Scan(&d.Date, &d.Orders, &d.TotalCOP); err != nil {
 			return nil, fmt.Errorf("escanear día de la serie: %w", err)
 		}
 		out = append(out, d)
@@ -97,7 +95,6 @@ func (r *DashboardRepository) RecentSales(ctx context.Context, limit int) ([]das
 			s.id,
 			s.status,
 			s.total_cop,
-			s.total_usd,
 			COALESCE(i.items, 0)::int AS items,
 			COALESCE(i.units, 0)::int AS units,
 			trim(concat_ws(' ', u.first_name, u.last_name)) AS customer_name,
@@ -106,7 +103,11 @@ func (r *DashboardRepository) RecentSales(ctx context.Context, limit int) ([]das
 		LEFT JOIN users u ON u.id = s.user_id
 		LEFT JOIN (
 			SELECT sale_id, count(*) AS items, sum(quantity) AS units
-			FROM sale_items
+			FROM (
+				SELECT sale_id, quantity FROM sale_items
+				UNION ALL
+				SELECT sale_id, quantity FROM sale_product_items
+			) lines
 			GROUP BY sale_id
 		) i ON i.sale_id = s.id
 		ORDER BY s.created_at DESC, s.id DESC
@@ -121,7 +122,7 @@ func (r *DashboardRepository) RecentSales(ctx context.Context, limit int) ([]das
 	for rows.Next() {
 		var o dashboard.RecentOrder
 		if err := rows.Scan(
-			&o.ID, &o.Status, &o.TotalCOP, &o.TotalUSD,
+			&o.ID, &o.Status, &o.TotalCOP,
 			&o.Items, &o.Units, &o.CustomerName, &o.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("escanear pedido reciente: %w", err)

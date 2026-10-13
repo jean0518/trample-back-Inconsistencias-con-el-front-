@@ -40,6 +40,12 @@ func (r *SaleRepository) Create(ctx context.Context, s sale.Sale) (sale.Sale, er
 		}
 	}
 
+	if len(s.ProductReservationIDs) > 0 {
+		if err := confirmProductReservationsStrictTx(ctx, tx, s.UserID, s.ProductReservationIDs); err != nil {
+			return sale.Sale{}, err
+		}
+	}
+
 	created, err := insertSale(ctx, tx, s, true)
 	if err != nil {
 		return sale.Sale{}, err
@@ -99,6 +105,13 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 	if err != nil {
 		return sale.Sale{}, err
 	}
+	// Los productos se bloquean después de los listings, siempre en ese orden,
+	// para que dos ventas simultáneas no se interbloqueen.
+	productShort, err := lockProductStockTx(ctx, tx, s.ProductItems)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	short = short || productShort
 	if short {
 		if strict {
 			return sale.Sale{}, sale.ErrInsufficientStock
@@ -108,11 +121,11 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 
 	created := s
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sales (user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, payment_reference, bold_payment_id, paid_at, requires_review, reservation_ids, pickup_deadline)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		INSERT INTO sales (user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, payment_reference, bold_payment_id, paid_at, requires_review, reservation_ids, pickup_deadline, product_reservation_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		RETURNING id, created_at
 	`, s.UserID, s.TotalCOP, s.TotalUSD, s.ShippingCOP, s.ShippingUSD, s.Fulfillment, s.Address, s.City, s.Phone, s.PaymentMethod, s.Status,
-		nullableStr(s.PaymentReference), nullableStr(s.BoldPaymentID), nullableTime(s.PaidAt), s.RequiresReview, nullableIDs(s.ReservationIDs), nullableTime(s.PickupDeadline),
+		nullableStr(s.PaymentReference), nullableStr(s.BoldPaymentID), nullableTime(s.PaidAt), s.RequiresReview, nullableIDs(s.ReservationIDs), nullableTime(s.PickupDeadline), nullableIDs(s.ProductReservationIDs),
 	).Scan(&created.ID, &created.CreatedAt)
 	if err != nil {
 		return sale.Sale{}, fmt.Errorf("crear venta: %w", err)
@@ -135,6 +148,11 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 		created.Items = append(created.Items, item)
 	}
 
+	created.ProductItems, err = insertProductItemsTx(ctx, tx, created.ID, s.ProductItems)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+
 	// Al vender se descuenta el inventario (la carta se consume aquí, no al
 	// reservar): si el listing llega a 0 unidades pasa a 'inactive' y deja de
 	// aparecer en el catálogo público; si le quedan unidades, permanece activo
@@ -149,6 +167,9 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 		`, it.ListingID, it.Quantity); err != nil {
 			return sale.Sale{}, fmt.Errorf("descontar listing vendido: %w", err)
 		}
+	}
+	if err := decrementProductStockTx(ctx, tx, s.ProductItems); err != nil {
+		return sale.Sale{}, err
 	}
 
 	return created, nil
@@ -215,7 +236,10 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 		items = append(items, it)
 	}
 	s.Items = items
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return r.loadProductItems(ctx, s)
 }
 
 // FindByID devuelve una venta con sus items.
@@ -238,13 +262,39 @@ func (r *SaleRepository) FindByID(ctx context.Context, id int64) (sale.Sale, err
 // pasarela. Nada de esto es un pedido todavía.
 // ---------------------------------------------------------------------------
 
-const checkoutSelect = `
-	SELECT reference, user_id::text, total_cop, total_usd, shipping_cop, shipping_usd,
+const checkoutColumns = `reference, user_id::text, total_cop, total_usd, shipping_cop, shipping_usd,
 	       fulfillment, address, city, phone, items, reservation_ids, status,
 	       COALESCE(sale_id, 0), COALESCE(bold_payment_id, ''), created_at,
-	       COALESCE(paid_at, to_timestamp(0)), expires_at
-	FROM payment_checkouts
-`
+	       COALESCE(paid_at, to_timestamp(0)), expires_at,
+	       product_items, product_reservation_ids`
+
+const checkoutSelect = `SELECT ` + checkoutColumns + ` FROM payment_checkouts `
+
+// scanCheckout lee un checkout en el orden de checkoutColumns y deserializa el
+// snapshot de cartas (items) y de productos (product_items).
+func scanCheckout(row pgx.Row) (sale.CheckoutIntent, error) {
+	var (
+		c            sale.CheckoutIntent
+		items        []byte
+		productItems []byte
+	)
+	err := row.Scan(
+		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
+		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
+		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
+		&productItems, &c.ProductReservationIDs,
+	)
+	if err != nil {
+		return sale.CheckoutIntent{}, err
+	}
+	if err := json.Unmarshal(items, &c.Items); err != nil {
+		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", c.Reference, err)
+	}
+	if err := json.Unmarshal(productItems, &c.ProductItems); err != nil {
+		return sale.CheckoutIntent{}, fmt.Errorf("leer productos del checkout %s: %w", c.Reference, err)
+	}
+	return c, nil
+}
 
 // CreateCheckout guarda la intención de pago. El stock NO se toca: lo retienen
 // las reservas del carrito, extendidas por el caso de uso.
@@ -257,17 +307,27 @@ func (r *SaleRepository) CreateCheckout(ctx context.Context, c sale.CheckoutInte
 		items = []byte("[]")
 	}
 
+	productItems, err := json.Marshal(c.ProductItems)
+	if err != nil {
+		return sale.CheckoutIntent{}, fmt.Errorf("serializar productos del checkout: %w", err)
+	}
+	if len(productItems) == 0 || string(productItems) == "null" {
+		productItems = []byte("[]")
+	}
+
 	var createdAt string
 	err = r.db.QueryRow(ctx, `
 		INSERT INTO payment_checkouts
 			(reference, user_id, fulfillment, address, city, phone,
 			 total_cop, total_usd, shipping_cop, shipping_usd,
-			 items, reservation_ids, status, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+			 items, reservation_ids, status, expires_at,
+			 product_items, product_reservation_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15::jsonb, $16)
 		RETURNING created_at
 	`, c.Reference, c.UserID, c.Fulfillment, c.Address, c.City, c.Phone,
 		c.TotalCOP, c.TotalUSD, c.ShippingCOP, c.ShippingUSD,
 		string(items), nullableIDs(c.ReservationIDs), sale.CheckoutOpen, c.ExpiresAt,
+		string(productItems), nullableIDs(c.ProductReservationIDs),
 	).Scan(&createdAt)
 	if err != nil {
 		// Índice único parcial: un solo checkout abierto por usuario. Si dos
@@ -291,53 +351,27 @@ func (r *SaleRepository) CreateCheckout(ctx context.Context, c sale.CheckoutInte
 // el caso de uso prepare uno nuevo en vez de resucitar un pago cerrado. Es una
 // sola sentencia, así que no puede pisar un cierre que ocurra a la vez.
 func (r *SaleRepository) ExtendCheckout(ctx context.Context, reference string, expiresAt time.Time) (sale.CheckoutIntent, error) {
-	var (
-		c     sale.CheckoutIntent
-		items []byte
-	)
-	err := r.db.QueryRow(ctx, `
+	c, err := scanCheckout(r.db.QueryRow(ctx, `
 		UPDATE payment_checkouts SET expires_at = $3
 		WHERE reference = $1 AND status = $2
-		RETURNING reference, user_id::text, total_cop, total_usd, shipping_cop, shipping_usd,
-		          fulfillment, address, city, phone, items, reservation_ids, status,
-		          COALESCE(sale_id, 0), COALESCE(bold_payment_id, ''), created_at,
-		          COALESCE(paid_at, to_timestamp(0)), expires_at
-	`, reference, sale.CheckoutOpen, expiresAt).Scan(
-		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
-		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
-		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
-	)
+		RETURNING `+checkoutColumns, reference, sale.CheckoutOpen, expiresAt))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.CheckoutIntent{}, sale.ErrPaymentNotFound
 		}
 		return sale.CheckoutIntent{}, fmt.Errorf("extender checkout %s: %w", reference, err)
 	}
-	if err := json.Unmarshal(items, &c.Items); err != nil {
-		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", reference, err)
-	}
 	return c, nil
 }
 
 // FindCheckoutByReference devuelve la intención de pago de esa referencia.
 func (r *SaleRepository) FindCheckoutByReference(ctx context.Context, reference string) (sale.CheckoutIntent, error) {
-	var (
-		c     sale.CheckoutIntent
-		items []byte
-	)
-	err := r.db.QueryRow(ctx, checkoutSelect+` WHERE reference = $1`, reference).Scan(
-		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
-		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
-		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
-	)
+	c, err := scanCheckout(r.db.QueryRow(ctx, checkoutSelect+` WHERE reference = $1`, reference))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.CheckoutIntent{}, sale.ErrPaymentNotFound
 		}
 		return sale.CheckoutIntent{}, fmt.Errorf("buscar checkout por referencia: %w", err)
-	}
-	if err := json.Unmarshal(items, &c.Items); err != nil {
-		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", reference, err)
 	}
 	return c, nil
 }
@@ -345,27 +379,16 @@ func (r *SaleRepository) FindCheckoutByReference(ctx context.Context, reference 
 // FindOpenCheckoutByUser devuelve el checkout abierto del usuario más reciente,
 // para reutilizar su referencia si vuelve a pulsar "Pagar".
 func (r *SaleRepository) FindOpenCheckoutByUser(ctx context.Context, userID string) (sale.CheckoutIntent, error) {
-	var (
-		c     sale.CheckoutIntent
-		items []byte
-	)
-	err := r.db.QueryRow(ctx, checkoutSelect+`
+	c, err := scanCheckout(r.db.QueryRow(ctx, checkoutSelect+`
 		WHERE user_id = $1 AND status = $2
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, userID, sale.CheckoutOpen).Scan(
-		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
-		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
-		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
-	)
+	`, userID, sale.CheckoutOpen))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.CheckoutIntent{}, sale.ErrPaymentNotFound
 		}
 		return sale.CheckoutIntent{}, fmt.Errorf("buscar checkout abierto: %w", err)
-	}
-	if err := json.Unmarshal(items, &c.Items); err != nil {
-		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", c.Reference, err)
 	}
 	return c, nil
 }
@@ -384,15 +407,7 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 	}
 	defer tx.Rollback(ctx)
 
-	var (
-		c     sale.CheckoutIntent
-		items []byte
-	)
-	err = tx.QueryRow(ctx, checkoutSelect+` WHERE reference = $1 FOR UPDATE`, reference).Scan(
-		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
-		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
-		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
-	)
+	c, err := scanCheckout(tx.QueryRow(ctx, checkoutSelect+` WHERE reference = $1 FOR UPDATE`, reference))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.Sale{}, sale.ErrPaymentNotFound
@@ -408,10 +423,6 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 		return r.FindByID(ctx, c.SaleID)
 	}
 
-	if err := json.Unmarshal(items, &c.Items); err != nil {
-		return sale.Sale{}, fmt.Errorf("leer items del checkout %s: %w", reference, err)
-	}
-
 	// Confirmar las reservas que sostenían el pago. Si alguna ya no estaba
 	// activa (el checkout expiró y el stock se liberó antes de que llegara el
 	// dinero) el pedido se crea igual, pero marcado para revisión manual: el
@@ -420,6 +431,11 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 	if err != nil {
 		return sale.Sale{}, err
 	}
+	productReview, err := confirmProductReservationsTx(ctx, tx, c.ProductReservationIDs)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	review = review || productReview
 	// También se revisa a mano un pago que llega cuando el checkout ya no estaba
 	// abierto (venció, falló o se reemplazó por un carrito nuevo) o cuyo monto no
 	// coincide con el del pedido: el dinero entró, pero algo no es lo esperado.
@@ -448,6 +464,9 @@ func (r *SaleRepository) ApprovePayment(ctx context.Context, reference, paymentI
 		RequiresReview:   review,
 		ReservationIDs:   c.ReservationIDs,
 		Items:            c.Items,
+
+		ProductItems:          c.ProductItems,
+		ProductReservationIDs: c.ProductReservationIDs,
 	}, false)
 	if err != nil {
 		return sale.Sale{}, err
@@ -478,13 +497,14 @@ func (r *SaleRepository) RejectPayment(ctx context.Context, reference string) (s
 	defer tx.Rollback(ctx)
 
 	var (
-		c              sale.CheckoutIntent
-		reservationIDs []int64
-		status         string
+		c                     sale.CheckoutIntent
+		reservationIDs        []int64
+		productReservationIDs []int64
+		status                string
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT reference, reservation_ids, status FROM payment_checkouts WHERE reference = $1 FOR UPDATE
-	`, reference).Scan(&c.Reference, &reservationIDs, &status)
+		SELECT reference, reservation_ids, product_reservation_ids, status FROM payment_checkouts WHERE reference = $1 FOR UPDATE
+	`, reference).Scan(&c.Reference, &reservationIDs, &productReservationIDs, &status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.CheckoutIntent{}, sale.ErrPaymentNotFound
@@ -494,6 +514,9 @@ func (r *SaleRepository) RejectPayment(ctx context.Context, reference string) (s
 
 	if status == sale.CheckoutOpen {
 		if err := releaseReservationsTx(ctx, tx, reservationIDs); err != nil {
+			return sale.CheckoutIntent{}, err
+		}
+		if err := releaseProductReservationsTx(ctx, tx, productReservationIDs); err != nil {
 			return sale.CheckoutIntent{}, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -539,11 +562,12 @@ func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duratio
 	defer tx.Rollback(ctx)
 
 	type expired struct {
-		reference      string
-		reservationIDs []int64
+		reference             string
+		reservationIDs        []int64
+		productReservationIDs []int64
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT reference, reservation_ids
+		SELECT reference, reservation_ids, product_reservation_ids
 		FROM payment_checkouts
 		WHERE status = $1 AND expires_at <= now() - make_interval(secs => $2)
 		FOR UPDATE
@@ -554,7 +578,7 @@ func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duratio
 	var list []expired
 	for rows.Next() {
 		var e expired
-		if err := rows.Scan(&e.reference, &e.reservationIDs); err != nil {
+		if err := rows.Scan(&e.reference, &e.reservationIDs, &e.productReservationIDs); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("escanear checkout vencido: %w", err)
 		}
@@ -567,6 +591,9 @@ func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duratio
 
 	for _, e := range list {
 		if err := releaseReservationsTx(ctx, tx, e.reservationIDs); err != nil {
+			return 0, err
+		}
+		if err := releaseProductReservationsTx(ctx, tx, e.productReservationIDs); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -860,6 +887,9 @@ func cancelPickupTx(ctx context.Context, tx pgx.Tx, id int64) error {
 		`, l.listingID, l.quantity); err != nil {
 			return fmt.Errorf("devolver stock del listing %d: %w", l.listingID, err)
 		}
+	}
+	if err := restoreProductStockTx(ctx, tx, id); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE sales SET status = $2 WHERE id = $1`, id, sale.StatusCancelled); err != nil {
 		return fmt.Errorf("cancelar pedido %d: %w", id, err)

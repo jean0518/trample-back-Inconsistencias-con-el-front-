@@ -133,7 +133,7 @@ func TestCheckPaymentStatus_RechazoYLuegoAprobadoCreaPedidoSinRevision(t *testin
 		t.Fatalf("primer intento: %v", err)
 	}
 
-	gateway.status = payment.Status{Reference: ref, Status: payment.StatusApproved, PaymentID: "tx-2", AmountCOP: 65000}
+	gateway.status = payment.Status{Reference: ref, Status: payment.StatusApproved, PaymentID: "tx-2", AmountCOP: 70000}
 	status, err := uc.Execute(context.Background(), testUser, ref, false)
 	if err != nil {
 		t.Fatalf("reintento: %v", err)
@@ -379,7 +379,7 @@ func TestProcessPaymentEvent_MontoDistintoRequiereRevision(t *testing.T) {
 
 func TestProcessPaymentEvent_MontoCorrectoNoRequiereRevision(t *testing.T) {
 	_, sales, gateway, ref := abrirCheckout(t, sale.PaymentBold)
-	gateway.status = payment.Status{Reference: ref, Status: payment.StatusApproved, PaymentID: "tx-1", AmountCOP: 65000}
+	gateway.status = payment.Status{Reference: ref, Status: payment.StatusApproved, PaymentID: "tx-1", AmountCOP: 70000}
 	uc := NewProcessPaymentEventUseCase(sales, gateway)
 
 	if _, err := uc.Execute(context.Background(), payment.Event{ID: "evt-ok", Type: EventSaleApproved, Reference: ref}); err != nil {

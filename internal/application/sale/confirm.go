@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"trample-back/internal/domain/product"
 	"trample-back/internal/domain/reservation"
 	"trample-back/internal/domain/sale"
 	"trample-back/internal/ports/out"
@@ -50,8 +51,16 @@ type ConfirmResult struct {
 // ningún pedido sin pagar.
 type ConfirmSaleUseCase struct {
 	reservations out.ReservationRepository
+	products     out.ProductReservationRepository
 	sales        out.SaleRepository
 	notifier     *PurchaseNotifier
+}
+
+// WithProducts activa la venta de productos propios en el mismo pedido que las
+// cartas. Sin esto, un carrito con reservas de productos se rechaza.
+func (uc *ConfirmSaleUseCase) WithProducts(p out.ProductReservationRepository) *ConfirmSaleUseCase {
+	uc.products = p
+	return uc
 }
 
 // WithNotifier activa el correo de "pedido apartado" de la recogida en tienda.
@@ -67,7 +76,7 @@ func NewConfirmSaleUseCase(reservations out.ReservationRepository, sales out.Sal
 // Execute confirma las reservas `ids` del carrito del usuario y registra la
 // venta.
 func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInput, ids []int64) (ConfirmResult, error) {
-	if len(ids) == 0 {
+	if len(ids) == 0 && len(input.ProductReservationIDs) == 0 {
 		return ConfirmResult{}, sale.ErrEmptyCart
 	}
 
@@ -102,7 +111,7 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		return ConfirmResult{}, err
 	}
 
-	cart, err := priceCart(ctx, uc.reservations, input.UserID, ids, input.Fulfillment)
+	cart, err := priceCart(ctx, uc.reservations, uc.products, input.UserID, ids, input.ProductReservationIDs, input.Fulfillment)
 	if err != nil {
 		return ConfirmResult{}, err
 	}
@@ -130,9 +139,12 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		PickupDeadline: deadline,
 		Items:          cart.items,
 		ReservationIDs: ids,
+
+		ProductItems:          cart.productItems,
+		ProductReservationIDs: input.ProductReservationIDs,
 	})
 	if err != nil {
-		if errors.Is(err, reservation.ErrNotFound) {
+		if errors.Is(err, reservation.ErrNotFound) || errors.Is(err, product.ErrNotFound) {
 			// Una reserva se canceló o expiró justo ahora (carrera): no se
 			// confirma el pedido para no registrar algo no disponible.
 			return ConfirmResult{}, sale.ErrReservationExpired
@@ -204,6 +216,9 @@ type pricedCart struct {
 	shippingCOP int64
 	shippingUSD float64
 	items       []sale.SaleItem
+	// productItems son las líneas de productos propios de la tienda. Solo tienen
+	// precio en COP, por eso no suman al totalUSD.
+	productItems []sale.ProductItem
 }
 
 // priceCart convierte las reservas activas del carrito en los totales del
@@ -212,40 +227,77 @@ type pricedCart struct {
 func priceCart(
 	ctx context.Context,
 	reservations out.ReservationRepository,
+	products out.ProductReservationRepository,
 	userID string,
 	ids []int64,
+	productIDs []int64,
 	fulfillment string,
 ) (pricedCart, error) {
-	active, err := reservations.ListActiveByUserAndIDs(ctx, userID, ids)
-	if err != nil {
-		return pricedCart{}, err
-	}
-	if len(active) == 0 {
+	if len(ids) == 0 && len(productIDs) == 0 {
 		return pricedCart{}, sale.ErrEmptyCart
-	}
-	// ListActiveByUserAndIDs filtra por expires_at > now(), así que si devuelve
-	// menos de las pedidas es que alguna expiró o ya no está activa.
-	if len(active) != len(ids) {
-		return pricedCart{}, sale.ErrReservationExpired
 	}
 
 	var cart pricedCart
-	for _, it := range active {
-		// Se redondea al peso (no se trunca): un precio de 12345.9 se cobra como
-		// 12346, no como 12345.
-		priceCOP := int64(math.Round(it.PriceCOP))
-		cart.totalCOP += priceCOP * int64(it.Quantity)
-		cart.totalUSD += it.PriceUSD * float64(it.Quantity)
-		listingID := it.ListingID
-		cart.items = append(cart.items, sale.SaleItem{
-			ListingID: &listingID,
-			CardID:    it.CardID,
-			CardName:  it.CardName,
-			Language:  it.Language,
-			Quantity:  it.Quantity,
-			PriceCOP:  priceCOP,
-			PriceUSD:  it.PriceUSD,
-		})
+	// cardsCOP es lo que suman solo las cartas: único tramo del pedido que tiene
+	// equivalente en USD, y por tanto la base para repartir el envío en USD.
+	var cardsCOP int64
+	if len(ids) > 0 {
+		active, err := reservations.ListActiveByUserAndIDs(ctx, userID, ids)
+		if err != nil {
+			return pricedCart{}, err
+		}
+		if len(active) == 0 {
+			return pricedCart{}, sale.ErrEmptyCart
+		}
+		// ListActiveByUserAndIDs filtra por expires_at > now(), así que si devuelve
+		// menos de las pedidas es que alguna expiró o ya no está activa.
+		if len(active) != len(ids) {
+			return pricedCart{}, sale.ErrReservationExpired
+		}
+
+		for _, it := range active {
+			// Se redondea al peso (no se trunca): un precio de 12345.9 se cobra como
+			// 12346, no como 12345.
+			priceCOP := int64(math.Round(it.PriceCOP))
+			cart.totalCOP += priceCOP * int64(it.Quantity)
+			cardsCOP += priceCOP * int64(it.Quantity)
+			cart.totalUSD += it.PriceUSD * float64(it.Quantity)
+			listingID := it.ListingID
+			cart.items = append(cart.items, sale.SaleItem{
+				ListingID: &listingID,
+				CardID:    it.CardID,
+				CardName:  it.CardName,
+				Language:  it.Language,
+				Quantity:  it.Quantity,
+				PriceCOP:  priceCOP,
+				PriceUSD:  it.PriceUSD,
+			})
+		}
+	}
+
+	if len(productIDs) > 0 {
+		// Sin el repositorio de productos conectado no se puede cobrar un carrito
+		// con productos: se rechaza en vez de ignorarlos y cobrar solo las cartas.
+		if products == nil {
+			return pricedCart{}, sale.ErrInvalidInput
+		}
+		active, err := products.ListActiveByUserAndIDs(ctx, userID, productIDs)
+		if err != nil {
+			return pricedCart{}, err
+		}
+		if len(active) != len(productIDs) {
+			return pricedCart{}, sale.ErrReservationExpired
+		}
+		for _, it := range active {
+			cart.totalCOP += it.PriceCOP * int64(it.Quantity)
+			productID := it.ProductID
+			cart.productItems = append(cart.productItems, sale.ProductItem{
+				ProductID: &productID,
+				Title:     it.Title,
+				Quantity:  it.Quantity,
+				PriceCOP:  it.PriceCOP,
+			})
+		}
 	}
 
 	// Cargo de envío: solo cuando la entrega es a domicilio. Se suma al total
@@ -254,8 +306,10 @@ func priceCart(
 	// pedido (constante para todos los items), sin depender de una red extra.
 	if fulfillment == sale.FulfillmentShipping {
 		cart.shippingCOP = sale.ShippingCostCOP
-		if cart.totalCOP > 0 {
-			cart.shippingUSD = math.Round(float64(cart.shippingCOP)*(cart.totalUSD/float64(cart.totalCOP))*100) / 100
+		// Se reparte con la razón USD/COP de las cartas; los productos no tienen
+		// USD y diluirían la razón (en un pedido solo de productos no hay USD).
+		if cardsCOP > 0 {
+			cart.shippingUSD = math.Round(float64(cart.shippingCOP)*(cart.totalUSD/float64(cardsCOP))*100) / 100
 		}
 		cart.totalCOP += cart.shippingCOP
 		cart.totalUSD += cart.shippingUSD

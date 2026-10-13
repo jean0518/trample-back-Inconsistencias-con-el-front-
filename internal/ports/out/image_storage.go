@@ -17,4 +17,7 @@ type ImageStorage interface {
 	// El implementador decide la clave y no debe reutilizar una por carta:
 	// re-subir un frontal dejaría el anterior cacheado en el navegador.
 	Put(ctx context.Context, cardID int64, upload catalog.ImageUpload) (string, error)
+	// PutProductImage sube una foto de producto. Va en su propio método para que
+	// las fotos del módulo de productos no compartan carpeta con las de cartas.
+	PutProductImage(ctx context.Context, productID int64, upload catalog.ImageUpload) (string, error)
 }

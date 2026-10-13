@@ -76,9 +76,9 @@ func TestCreateCheckout_CalculaTotales(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	// 45000*2 + 8000*1 = 98000, más 20000 de envío a domicilio.
-	const wantCOP = int64(118000)
-	const wantUSD = 29.5
+	// 45000*2 + 8000*1 = 98000, más 25000 de envío a domicilio.
+	const wantCOP = int64(123000)
+	const wantUSD = 30.75
 	if result.Checkout.TotalCOP != wantCOP {
 		t.Errorf("TotalCOP = %d, se esperaba %d", result.Checkout.TotalCOP, wantCOP)
 	}
@@ -387,7 +387,7 @@ func TestCreateCheckout_DosPagarSimultaneosComparteElCheckout(t *testing.T) {
 		Reference:      "TRM-ganador",
 		UserID:         testUser,
 		Fulfillment:    sale.FulfillmentShipping,
-		TotalCOP:       118000,
+		TotalCOP:       123000,
 		ReservationIDs: []int64{2, 1},
 		ExpiresAt:      time.Now().Add(20 * time.Minute),
 	}

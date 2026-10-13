@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"trample-back/internal/domain/payment"
+	"trample-back/internal/domain/product"
 	"trample-back/internal/domain/reservation"
 	"trample-back/internal/domain/sale"
 	"trample-back/internal/ports/out"
@@ -25,6 +26,7 @@ import (
 // pasarela confirma que el pago entró (SaleRepository.ApprovePayment).
 type CreateCheckoutUseCase struct {
 	reservations out.ReservationRepository
+	products     out.ProductReservationRepository
 	sales        out.SaleRepository
 	gateway      out.PaymentGateway
 	holdMinutes  int
@@ -50,6 +52,13 @@ func NewCreateCheckoutUseCase(
 	}
 }
 
+// WithProducts activa el cobro de productos propios junto con las cartas. Sin
+// esto, un carrito con reservas de productos se rechaza.
+func (uc *CreateCheckoutUseCase) WithProducts(p out.ProductReservationRepository) *CreateCheckoutUseCase {
+	uc.products = p
+	return uc
+}
+
 // CreateCheckoutResult son los datos que el frontend necesita para abrir la
 // pasarela: la referencia del checkout (para poder consultarlo después) y los
 // parámetros del botón de pagos.
@@ -66,7 +75,8 @@ type CreateCheckoutResult struct {
 // abiertos que no correspondan al carrito actual se cierran, conservando las
 // reservas del carrito.
 func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.ConfirmInput, ids []int64) (CreateCheckoutResult, error) {
-	if len(ids) == 0 {
+	productIDs := input.ProductReservationIDs
+	if len(ids) == 0 && len(productIDs) == 0 {
 		return CreateCheckoutResult{}, sale.ErrEmptyCart
 	}
 	if !uc.gateway.Configured() {
@@ -83,7 +93,7 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		return CreateCheckoutResult{}, sale.ErrInvalidInput
 	}
 
-	cart, err := priceCart(ctx, uc.reservations, input.UserID, ids, input.Fulfillment)
+	cart, err := priceCart(ctx, uc.reservations, uc.products, input.UserID, ids, productIDs, input.Fulfillment)
 	if err != nil {
 		return CreateCheckoutResult{}, err
 	}
@@ -102,7 +112,8 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		return c.ExpiresAt.After(now) &&
 			c.Fulfillment == input.Fulfillment &&
 			c.TotalCOP == cart.totalCOP &&
-			sameReservations(c.ReservationIDs, ids)
+			sameReservations(c.ReservationIDs, ids) &&
+			sameReservations(c.ProductReservationIDs, productIDs)
 	}
 	reuse := err == nil && matches(checkout)
 
@@ -112,7 +123,7 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 		// barrido usa `expires_at` para decidir a qué checkout liberarle las
 		// cartas; si solo se moviera el stock, podría soltarlo mientras el
 		// cliente sigue pagando.
-		if err := uc.holdStock(ctx, input.UserID, ids); err != nil {
+		if err := uc.holdStock(ctx, input.UserID, ids, productIDs); err != nil {
 			return CreateCheckoutResult{}, err
 		}
 		expiresAt := now.Add(time.Duration(uc.holdMinutes) * time.Minute)
@@ -176,7 +187,7 @@ func (uc *CreateCheckoutUseCase) newCheckout(
 	ids []int64,
 	now time.Time,
 ) (sale.CheckoutIntent, error) {
-	if err := uc.holdStock(ctx, input.UserID, ids); err != nil {
+	if err := uc.holdStock(ctx, input.UserID, ids, input.ProductReservationIDs); err != nil {
 		return sale.CheckoutIntent{}, err
 	}
 
@@ -195,6 +206,9 @@ func (uc *CreateCheckoutUseCase) newCheckout(
 		Items:          cart.items,
 		ReservationIDs: ids,
 		ExpiresAt:      now.Add(time.Duration(uc.holdMinutes) * time.Minute),
+
+		ProductItems:          cart.productItems,
+		ProductReservationIDs: input.ProductReservationIDs,
 	}
 	return uc.sales.CreateCheckout(ctx, intent)
 }
@@ -204,12 +218,21 @@ func (uc *CreateCheckoutUseCase) newCheckout(
 // carrito solo aplican antes de pulsar Pagar). Dura `paymentGraceMinutes` más
 // que el vencimiento que ve la pasarela, para no soltar el stock de un pago que
 // se aprueba justo al límite.
-func (uc *CreateCheckoutUseCase) holdStock(ctx context.Context, userID string, ids []int64) error {
-	if err := uc.reservations.ExtendExpiry(ctx, userID, ids, uc.holdMinutes+paymentGraceMinutes); err != nil {
+func (uc *CreateCheckoutUseCase) holdStock(ctx context.Context, userID string, ids, productIDs []int64) error {
+	minutes := uc.holdMinutes + paymentGraceMinutes
+	if err := uc.reservations.ExtendExpiry(ctx, userID, ids, minutes); err != nil {
 		if errors.Is(err, reservation.ErrNotFound) {
 			return sale.ErrReservationExpired
 		}
 		return err
+	}
+	if len(productIDs) > 0 && uc.products != nil {
+		if err := uc.products.ExtendExpiry(ctx, userID, productIDs, minutes); err != nil {
+			if errors.Is(err, product.ErrNotFound) {
+				return sale.ErrReservationExpired
+			}
+			return err
+		}
 	}
 	return nil
 }

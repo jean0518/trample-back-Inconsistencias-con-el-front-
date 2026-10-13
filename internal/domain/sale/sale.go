@@ -15,7 +15,7 @@ var ErrForbidden = errors.New("no tienes acceso a esa venta")
 // ErrInsufficientStock se devuelve cuando, al registrar la venta, un listing ya no
 // tiene las unidades que se iban a vender (alguien editó el inventario mientras
 // la carta estaba reservada).
-var ErrInsufficientStock = errors.New("una o más cartas ya no tienen stock suficiente")
+var ErrInsufficientStock = errors.New("uno o más artículos ya no tienen stock suficiente")
 
 // ErrCheckoutConflict se devuelve cuando ya existe un pago abierto para el
 // usuario y no corresponde a este carrito (dos "Pagar" simultáneos).
@@ -50,7 +50,7 @@ const (
 
 	// ShippingCostCOP es el cargo fijo de envío a domicilio. Se suma al
 	// total del pedido solo cuando fulfillment = shipping.
-	ShippingCostCOP int64 = 20000
+	ShippingCostCOP int64 = 25000
 )
 
 // Sale representa el registro local de una venta/pedido. Una venta solo existe
@@ -71,6 +71,9 @@ type Sale struct {
 	Status        string
 	CreatedAt     string
 	Items         []SaleItem
+	// ProductItems son las líneas de productos propios de la tienda (módulo de
+	// productos). Van aparte de Items porque no tienen listing ni carta.
+	ProductItems []ProductItem
 
 	// Datos del pago en línea (Bold). Vacíos en ventas en efectivo o por
 	// transferencia.
@@ -84,6 +87,8 @@ type Sale struct {
 	RequiresReview bool
 	// ReservationIDs son las reservas del carrito que sosteneron esta venta.
 	ReservationIDs []int64
+	// ProductReservationIDs son las reservas de productos que la sostuvieron.
+	ProductReservationIDs []int64
 	// PickupDeadline es el límite para recoger un pedido pendiente en tienda
 	// (cero si no aplica).
 	PickupDeadline time.Time
@@ -103,6 +108,16 @@ type SaleItem struct {
 	Quantity  int     `json:"quantity"`
 	PriceCOP  int64   `json:"price_cop"`
 	PriceUSD  float64 `json:"price_usd"`
+}
+
+// ProductItem es una línea de producto de la venta: snapshot del título y el
+// precio al vender, para que el historial no cambie si el producto se edita.
+// ProductID es nil si el producto se eliminó.
+type ProductItem struct {
+	ProductID *int64 `json:"product_id"`
+	Title     string `json:"title"`
+	Quantity  int    `json:"quantity"`
+	PriceCOP  int64  `json:"price_cop"`
 }
 
 // Estados de un CheckoutIntent. Recordan al estado de la venta para quien viene
@@ -139,7 +154,10 @@ type CheckoutIntent struct {
 	PaymentMethod  string
 	Items          []SaleItem
 	ReservationIDs []int64
-	Status         string
+	// ProductItems y ProductReservationIDs son lo mismo para los productos.
+	ProductItems          []ProductItem
+	ProductReservationIDs []int64
+	Status                string
 	// SaleID es el pedido creado al aprobarse el pago; 0 mientras no exista.
 	SaleID        int64
 	BoldPaymentID string
@@ -172,6 +190,9 @@ type ConfirmInput struct {
 	Phone         string
 	PaymentMethod string
 	IsAdmin       bool
+	// ProductReservationIDs son las reservas de productos del carrito que se
+	// pagan junto con las cartas (el módulo de productos tiene carrito propio).
+	ProductReservationIDs []int64
 	// Datos del comprador tomados de la sesión (nunca del body), para
 	// prellenar el formulario de la pasarela.
 	PayerEmail string

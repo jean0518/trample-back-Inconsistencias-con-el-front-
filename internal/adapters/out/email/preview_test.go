@@ -57,6 +57,9 @@ func TestWritePreviews(t *testing.T) {
 		{"recogida-apartada", func() error { return m.SendPickupReserved(ctx, "a@b.co", "Daniel", pickup) }},
 		{"recogida-vencida", func() error { return m.SendPickupCancelled(ctx, "a@b.co", "Daniel", pickup, true) }},
 		{"recogida-cancelada", func() error { return m.SendPickupCancelled(ctx, "a@b.co", "Daniel", pickup, false) }},
+		{"verificar-correo", func() error {
+			return m.SendEmailVerification(ctx, "a@b.co", "Daniel", "https://tramplestore.com/verificar-email?token=abc123")
+		}},
 	}
 	for _, s := range steps {
 		cur = s.name

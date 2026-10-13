@@ -112,7 +112,6 @@ func main() {
 	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, priceNotifier, log)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
 	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
-	registerUC := appAuth.NewRegisterUseCase(userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
 	createListingUC := appListing.NewCreateListingUseCase(listingRepo, ownerRepo, trmClient)
 	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
@@ -148,6 +147,8 @@ func main() {
 		log.Warn("RESEND_API_KEY sin configurar: no se enviarán correos a los clientes")
 	}
 	purchaseNotifier := appSale.NewPurchaseNotifier(userRepo, mailer)
+	verifyEmailUC := appAuth.NewVerifyEmailUseCase(userRepo, mailer, cfg.FrontendURL)
+	registerUC := appAuth.NewRegisterUseCase(userRepo, verifyEmailUC)
 	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo).WithNotifier(purchaseNotifier)
 	pickupOrdersUC := appSale.NewPickupOrdersUseCase(saleRepo, purchaseNotifier)
 	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
@@ -160,7 +161,7 @@ func main() {
 	secureCookie := cfg.Env == "production"
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
 	router := httpadapter.NewRouter(httpadapter.Handlers{
-		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, secureCookie),
+		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, verifyEmailUC, secureCookie),
 		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
 		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:        httpadapter.NewPokemonHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),

@@ -56,3 +56,24 @@ func TestRenderCorreos(t *testing.T) {
 		t.Errorf("correo de pago fallido inesperado: %s", got.Text)
 	}
 }
+
+func TestRenderVerificacion(t *testing.T) {
+	var got message
+	m := &Mailer{
+		send:  func(_ context.Context, msg message) error { got = msg; return nil },
+		brand: Brand{SiteURL: "https://tramplestore.com", ContactEmail: "hola@trample.co"},
+	}
+	link := "https://tramplestore.com/verificar-email?token=abc123"
+	if err := m.SendEmailVerification(context.Background(), "a@b.co", "<i>Ana</i>", link); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.HTML, "<!doctype html>") || !strings.Contains(got.HTML, `href="`+link+`"`) {
+		t.Errorf("el HTML debe llevar el layout y el botón con el enlace: %s", got.HTML)
+	}
+	if !strings.Contains(got.Text, link) {
+		t.Errorf("el texto plano debe incluir el enlace: %s", got.Text)
+	}
+	if strings.Contains(got.HTML, "<i>Ana</i>") {
+		t.Error("el nombre no se escapó en el HTML")
+	}
+}

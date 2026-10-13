@@ -10,11 +10,13 @@ import (
 )
 
 type RegisterUseCase struct {
-	users out.UserRepository
+	users  out.UserRepository
+	verify *VerifyEmailUseCase
 }
 
-func NewRegisterUseCase(users out.UserRepository) *RegisterUseCase {
-	return &RegisterUseCase{users: users}
+// NewRegisterUseCase arma el registro. `verify` puede ser nil (no se envía correo).
+func NewRegisterUseCase(users out.UserRepository, verify *VerifyEmailUseCase) *RegisterUseCase {
+	return &RegisterUseCase{users: users, verify: verify}
 }
 
 type RegisterInput struct {
@@ -48,11 +50,18 @@ func (uc *RegisterUseCase) Execute(ctx context.Context, in RegisterInput) (auth.
 		return auth.User{}, err
 	}
 
-	return uc.users.Create(ctx, auth.User{
+	user, err := uc.users.Create(ctx, auth.User{
 		FirstName: firstName,
 		LastName:  lastName,
 		Email:     email,
 		Password:  string(hash),
 		Role:      auth.RoleCustomer,
 	})
+	if err != nil {
+		return auth.User{}, err
+	}
+	// El correo de verificación sale en segundo plano: si falla, el usuario lo
+	// pide de nuevo desde su cuenta; el registro no se cae por eso.
+	uc.verify.SendAsync(user)
+	return user, nil
 }

@@ -96,6 +96,8 @@ func NewRouter(h Handlers) http.Handler {
 		r.Post("/register", h.Auth.Register)
 		r.Post("/login", h.Auth.Login)
 		r.Post("/logout", h.Auth.Logout)
+		r.Get("/verify-email", h.Auth.VerifyEmail)
+		r.With(h.AuthMiddleware.RequireAuth).Post("/resend-verification", h.Auth.ResendVerification)
 		r.With(h.AuthMiddleware.RequireAuth).Get("/me", h.Auth.Me)
 	})
 

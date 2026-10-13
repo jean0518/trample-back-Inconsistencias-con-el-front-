@@ -13,6 +13,7 @@ import (
 type AuthHandler struct {
 	register     *appAuth.RegisterUseCase
 	login        *appAuth.LoginUseCase
+	verifyEmail  *appAuth.VerifyEmailUseCase
 	secureCookie bool
 }
 
@@ -23,6 +24,8 @@ type authUserResponse struct {
 	Email       string   `json:"email"`
 	Role        string   `json:"role"`
 	Permissions []string `json:"permissions"`
+	// EmailVerified es false hasta que el cliente abre el enlace del correo.
+	EmailVerified bool `json:"email_verified"`
 }
 
 func newAuthUserResponse(u auth.User) authUserResponse {
@@ -31,17 +34,18 @@ func newAuthUserResponse(u auth.User) authUserResponse {
 		perms = []string{}
 	}
 	return authUserResponse{
-		ID:          u.ID,
-		FirstName:   u.FirstName,
-		LastName:    u.LastName,
-		Email:       u.Email,
-		Role:        u.Role,
-		Permissions: perms,
+		ID:            u.ID,
+		FirstName:     u.FirstName,
+		LastName:      u.LastName,
+		Email:         u.Email,
+		Role:          u.Role,
+		Permissions:   perms,
+		EmailVerified: u.EmailVerified,
 	}
 }
 
-func NewAuthHandler(register *appAuth.RegisterUseCase, login *appAuth.LoginUseCase, secureCookie bool) *AuthHandler {
-	return &AuthHandler{register: register, login: login, secureCookie: secureCookie}
+func NewAuthHandler(register *appAuth.RegisterUseCase, login *appAuth.LoginUseCase, verifyEmail *appAuth.VerifyEmailUseCase, secureCookie bool) *AuthHandler {
+	return &AuthHandler{register: register, login: login, verifyEmail: verifyEmail, secureCookie: secureCookie}
 }
 
 func (h *AuthHandler) setAuthCookie(w http.ResponseWriter, token string) {
@@ -148,14 +152,52 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	if perms == nil {
 		perms = []string{}
 	}
+	// El JWT no sabe si el correo se verificó después de emitirse: se lee de la BD.
+	verified := false
+	if u, err := h.login.CurrentUser(r.Context(), authUser.ID); err == nil {
+		verified = u.EmailVerified
+	}
 	JSON(w, http.StatusOK, authUserResponse{
-		ID:          authUser.ID,
-		FirstName:   authUser.FirstName,
-		LastName:    authUser.LastName,
-		Email:       authUser.Email,
-		Role:        authUser.Role,
-		Permissions: perms,
+		ID:            authUser.ID,
+		FirstName:     authUser.FirstName,
+		LastName:      authUser.LastName,
+		Email:         authUser.Email,
+		Role:          authUser.Role,
+		Permissions:   perms,
+		EmailVerified: verified,
 	})
+}
+
+// VerifyEmail confirma el correo con el token del enlace (`?token=`). Es público:
+// el enlace se abre desde el correo, quizá sin sesión iniciada.
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	err := h.verifyEmail.Verify(r.Context(), r.URL.Query().Get("token"))
+	switch {
+	case err == nil:
+		JSON(w, http.StatusOK, map[string]string{"message": "correo verificado"})
+	case errors.Is(err, auth.ErrInvalidVerifyToken):
+		JSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	default:
+		JSON(w, http.StatusInternalServerError, map[string]string{"error": "error interno del servidor"})
+	}
+}
+
+// ResendVerification reenvía el correo de verificación al usuario con sesión.
+func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	err := h.verifyEmail.Resend(r.Context(), authUser.ID)
+	switch {
+	case err == nil:
+		JSON(w, http.StatusAccepted, map[string]string{"message": "te enviamos un correo de verificación"})
+	case errors.Is(err, appAuth.ErrVerifyTooSoon):
+		JSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+	default:
+		JSON(w, http.StatusInternalServerError, map[string]string{"error": "error interno del servidor"})
+	}
 }
 
 // Logout borra la cookie de sesión.

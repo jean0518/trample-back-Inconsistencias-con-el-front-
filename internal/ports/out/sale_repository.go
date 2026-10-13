@@ -74,6 +74,17 @@ type SaleRepository interface {
 	// no llegó a ser venta.
 	FlagSaleForReview(ctx context.Context, reference string) error
 
+	// MarkPickupPaid registra el pago en tienda de un pedido pendiente de
+	// recogida (pasa a 'paid'). Devuelve sale.ErrNotPendingPickup si ya se pagó o
+	// canceló, y sale.ErrPaymentNotFound si no existe.
+	MarkPickupPaid(ctx context.Context, id int64) (sale.Sale, error)
+	// CancelPickup cancela un pedido pendiente de recogida y devuelve su stock al
+	// inventario. Mismos errores que MarkPickupPaid.
+	CancelPickup(ctx context.Context, id int64) (sale.Sale, error)
+	// ExpirePickups cancela los pedidos pendientes cuyo plazo venció en `now` y
+	// devuelve los que canceló. Cada uno se procesa por separado.
+	ExpirePickups(ctx context.Context, now time.Time) ([]sale.Sale, error)
+
 	// FindByID devuelve una venta con sus items. Se usa para leer el pedido que
 	// dejó ApprovePayment, cuya referencia ya solo vive en el checkout.
 	FindByID(ctx context.Context, id int64) (sale.Sale, error)

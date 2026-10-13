@@ -98,6 +98,7 @@ type fakeSales struct {
 	expireGrace time.Duration
 	flagged     []string
 	forgotten   []string
+	restocked   []int64 // pedidos cancelados cuyo stock volvió al inventario
 	paidAmounts []int64
 	// confirmedIDs y confirmErr modelan la confirmación de reservas que Create
 	// hace en la misma transacción que la venta.
@@ -288,6 +289,46 @@ func (f *fakeSales) FindByID(_ context.Context, id int64) (sale.Sale, error) {
 		return sale.Sale{}, sale.ErrPaymentNotFound
 	}
 	return s, nil
+}
+
+func (f *fakeSales) MarkPickupPaid(_ context.Context, id int64) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if s.Status != sale.StatusPendingPickup {
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	}
+	s.Status = sale.StatusPaid
+	f.sales[id] = s
+	return s, nil
+}
+
+func (f *fakeSales) CancelPickup(_ context.Context, id int64) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if s.Status != sale.StatusPendingPickup {
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	}
+	s.Status = sale.StatusCancelled
+	f.sales[id] = s
+	f.restocked = append(f.restocked, id)
+	return s, nil
+}
+
+func (f *fakeSales) ExpirePickups(_ context.Context, now time.Time) ([]sale.Sale, error) {
+	var out []sale.Sale
+	for id, s := range f.sales {
+		if s.Status == sale.StatusPendingPickup && !s.PickupDeadline.IsZero() && !s.PickupDeadline.After(now) {
+			s.Status = sale.StatusCancelled
+			f.sales[id] = s
+			f.restocked = append(f.restocked, id)
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeSales) ListByUser(context.Context, string, int, int) ([]sale.Sale, error) {

@@ -96,6 +96,8 @@ func NewRouter(h Handlers) http.Handler {
 		r.Post("/register", h.Auth.Register)
 		r.Post("/login", h.Auth.Login)
 		r.Post("/logout", h.Auth.Logout)
+		r.Get("/verify-email", h.Auth.VerifyEmail)
+		r.With(h.AuthMiddleware.RequireAuth).Post("/resend-verification", h.Auth.ResendVerification)
 		r.With(h.AuthMiddleware.RequireAuth).Get("/me", h.Auth.Me)
 	})
 
@@ -193,6 +195,11 @@ func NewRouter(h Handlers) http.Handler {
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermReservas)).
 			Get("/reservation-logs", h.Cart.ListReservationLogs)
 		r.Get("/sales", h.Sales.ListAdminSales)
+		// Pedidos de recogida en tienda: pagarlos en el local o cancelarlos.
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/mark-paid", h.Sales.MarkPickupPaid)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/cancel", h.Sales.CancelPickup)
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermResumen)).
 			Get("/sales-stats", h.Sales.SalesStats)
 

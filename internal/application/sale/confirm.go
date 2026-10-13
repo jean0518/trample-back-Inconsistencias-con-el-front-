@@ -51,6 +51,13 @@ type ConfirmResult struct {
 type ConfirmSaleUseCase struct {
 	reservations out.ReservationRepository
 	sales        out.SaleRepository
+	notifier     *PurchaseNotifier
+}
+
+// WithNotifier activa el correo de "pedido apartado" de la recogida en tienda.
+func (uc *ConfirmSaleUseCase) WithNotifier(n *PurchaseNotifier) *ConfirmSaleUseCase {
+	uc.notifier = n
+	return uc
 }
 
 func NewConfirmSaleUseCase(reservations out.ReservationRepository, sales out.SaleRepository) *ConfirmSaleUseCase {
@@ -76,6 +83,14 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		if !input.IsAdmin {
 			return ConfirmResult{}, sale.ErrInvalidInput
 		}
+	case sale.PaymentStore:
+		// La recogida en tienda se paga en el local: cualquier cliente puede
+		// apartar el pedido, pero solo con entrega en tienda. El pedido nace
+		// pendiente (stock apartado) y vence a los 2 días hábiles; el staff lo
+		// marca como pagado cuando el cliente paga y lo recoge.
+		if input.Fulfillment != sale.FulfillmentPickup {
+			return ConfirmResult{}, sale.ErrInvalidInput
+		}
 	case sale.PaymentBold:
 		// El pago con tarjeta se procesa en la pasarela: el pedido se crea al
 		// aprobarse el pago, no antes. Quien llama debe usar el checkout.
@@ -95,6 +110,11 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 	// Las reservas se confirman dentro de la misma transacción que registra la
 	// venta (Create). Así, si algo falla, no queda un carrito confirmado sin pedido
 	// ni un pedido sin las reservas confirmadas.
+	status, deadline := sale.StatusPaid, time.Time{}
+	if input.PaymentMethod == sale.PaymentStore {
+		status, deadline = sale.StatusPendingPickup, sale.PickupDeadlineFrom(time.Now())
+	}
+
 	created, err := uc.sales.Create(ctx, sale.Sale{
 		UserID:         input.UserID,
 		TotalCOP:       cart.totalCOP,
@@ -106,7 +126,8 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 		City:           input.City,
 		Phone:          input.Phone,
 		PaymentMethod:  input.PaymentMethod,
-		Status:         sale.StatusPaid,
+		Status:         status,
+		PickupDeadline: deadline,
 		Items:          cart.items,
 		ReservationIDs: ids,
 	})
@@ -117,6 +138,9 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 			return ConfirmResult{}, sale.ErrReservationExpired
 		}
 		return ConfirmResult{}, err
+	}
+	if created.Status == sale.StatusPendingPickup {
+		uc.notifier.PickupReserved(created)
 	}
 	return ConfirmResult{Sale: created}, nil
 }

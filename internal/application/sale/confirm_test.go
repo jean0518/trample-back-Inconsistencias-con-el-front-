@@ -66,7 +66,7 @@ func TestConfirmSale_EfectivoDeAdmin(t *testing.T) {
 func TestConfirmSale_RechazaPagoConTarjeta(t *testing.T) {
 	uc, _, sales := newConfirm()
 
-	if _, err := uc.Execute(context.Background(), pickupInput(), []int64{1, 2}); !errors.Is(err, sale.ErrInvalidInput) {
+	if _, err := uc.Execute(context.Background(), onlineInput(), []int64{1, 2}); !errors.Is(err, sale.ErrInvalidInput) {
 		t.Fatalf("err = %v, se esperaba ErrInvalidInput", err)
 	}
 	if len(sales.sales) != 0 {

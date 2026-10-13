@@ -81,3 +81,9 @@ func (uc *LoginUseCase) IssueToken(_ context.Context, user auth.User) (string, e
 	}
 	return signed, nil
 }
+
+// CurrentUser devuelve el usuario desde la base de datos. Sirve para datos que
+// cambian mientras el JWT sigue vigente (p. ej. el correo ya verificado).
+func (uc *LoginUseCase) CurrentUser(ctx context.Context, id string) (auth.User, error) {
+	return uc.users.FindByID(ctx, id)
+}

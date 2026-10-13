@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	appSale "trample-back/internal/application/sale"
 	"trample-back/internal/domain/auth"
 	"trample-back/internal/domain/payment"
@@ -19,6 +21,7 @@ type SaleHandler struct {
 	list        *appSale.ListSalesUseCase
 	stats       *appSale.SaleStatsUseCase
 	checkStatus *appSale.CheckPaymentStatusUseCase
+	pickups     *appSale.PickupOrdersUseCase
 }
 
 func NewSaleHandler(
@@ -27,8 +30,9 @@ func NewSaleHandler(
 	list *appSale.ListSalesUseCase,
 	stats *appSale.SaleStatsUseCase,
 	checkStatus *appSale.CheckPaymentStatusUseCase,
+	pickups *appSale.PickupOrdersUseCase,
 ) *SaleHandler {
-	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus}
+	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus, pickups: pickups}
 }
 
 // canSeeAllSales indica si el usuario puede consultar el historial completo de
@@ -71,11 +75,14 @@ type saleResponse struct {
 	Status        string  `json:"status"`
 	CreatedAt     string  `json:"created_at"`
 	// Datos del pago en línea (vacíos en efectivo o transferencia).
-	PaymentReference string             `json:"payment_reference,omitempty"`
-	BoldPaymentID    string             `json:"bold_payment_id,omitempty"`
-	PaidAt           string             `json:"paid_at,omitempty"`
-	RequiresReview   bool               `json:"requires_review"`
-	Items            []saleItemResponse `json:"items"`
+	PaymentReference string `json:"payment_reference,omitempty"`
+	BoldPaymentID    string `json:"bold_payment_id,omitempty"`
+	PaidAt           string `json:"paid_at,omitempty"`
+	RequiresReview   bool   `json:"requires_review"`
+	// PickupDeadline es el límite para pagar y recoger un pedido pendiente en
+	// tienda (RFC3339). Vacío en los demás pedidos.
+	PickupDeadline string             `json:"pickup_deadline,omitempty"`
+	Items          []saleItemResponse `json:"items"`
 }
 
 // boldCheckoutResponse son los datos que el frontend necesita para pintar el
@@ -150,6 +157,7 @@ func newSaleResponse(s sale.Sale) saleResponse {
 		BoldPaymentID:    s.BoldPaymentID,
 		PaidAt:           formatTime(s.PaidAt),
 		RequiresReview:   s.RequiresReview,
+		PickupDeadline:   formatTime(s.PickupDeadline),
 		Items:            items,
 	}
 }
@@ -169,7 +177,7 @@ type confirmSaleRequest struct {
 	Address        string  `json:"address"`        // requerido si shipping
 	City           string  `json:"city"`           // requerido si shipping
 	Phone          string  `json:"phone"`          // requerido si shipping
-	PaymentMethod  string  `json:"payment_method"` // efectivo | transferencia
+	PaymentMethod  string  `json:"payment_method"` // efectivo | transferencia (staff) | tienda (recogida, se paga en el local)
 }
 
 // confirmInputFromRequest traduce el body a la entrada del dominio. PayerEmail
@@ -304,7 +312,7 @@ func respondSaleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sale.ErrInvalidInput):
 		Error(w, http.StatusBadRequest, "datos de la venta inválidos")
 	case errors.Is(err, sale.ErrReservationExpired), errors.Is(err, sale.ErrCheckoutConflict),
-		errors.Is(err, sale.ErrInsufficientStock):
+		errors.Is(err, sale.ErrInsufficientStock), errors.Is(err, sale.ErrNotPendingPickup):
 		Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, sale.ErrPaymentNotFound):
 		Error(w, http.StatusNotFound, err.Error())
@@ -529,4 +537,61 @@ func (h *SaleHandler) SalesStats(w http.ResponseWriter, r *http.Request) {
 		TotalCOP: totalCOP,
 		TotalUSD: totalUSD,
 	})
+}
+
+// MarkPickupPaid registra que el cliente pagó y recogió su pedido en la tienda.
+//
+//	@Summary      Marcar como pagado un pedido de recogida en tienda
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /admin/sales/{id}/mark-paid [post]
+func (h *SaleHandler) MarkPickupPaid(w http.ResponseWriter, r *http.Request) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	s, err := h.pickups.MarkPaid(r.Context(), id)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
+// CancelPickup cancela un pedido de recogida pendiente y devuelve su stock.
+//
+//	@Summary      Cancelar un pedido de recogida en tienda pendiente
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /admin/sales/{id}/cancel [post]
+func (h *SaleHandler) CancelPickup(w http.ResponseWriter, r *http.Request) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	s, err := h.pickups.Cancel(r.Context(), id)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
+func saleIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return 0, false
+	}
+	return id, true
 }

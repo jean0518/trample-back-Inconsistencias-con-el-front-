@@ -1,10 +1,17 @@
 package auth
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var ErrEmailTaken = errors.New("email ya registrado")
 var ErrUserNotFound = errors.New("usuario no encontrado")
 var ErrIsAdmin = errors.New("no se puede modificar a un administrador")
+var ErrInvalidVerifyToken = errors.New("el enlace de verificación es inválido o ya expiró")
+
+// VerifyTokenTTL es lo que dura el enlace de verificación del correo.
+const VerifyTokenTTL = 24 * time.Hour
 
 const (
 	RoleCustomer       = "customer"
@@ -38,4 +45,10 @@ type User struct {
 	Password    string // bcrypt hash
 	Role        string
 	Permissions []string
+
+	// Verificación del correo. El token solo existe mientras hay una
+	// verificación pendiente.
+	EmailVerified        bool
+	EmailVerifyToken     string
+	EmailVerifyExpiresAt time.Time
 }

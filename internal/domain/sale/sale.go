@@ -9,6 +9,7 @@ var ErrEmptyCart = errors.New("el carrito no tiene items para confirmar")
 var ErrInvalidInput = errors.New("datos de la venta inválidos")
 var ErrReservationExpired = errors.New("una o más reservas del carrito expiraron o ya no están activas")
 var ErrPaymentNotFound = errors.New("no hay una venta con esa referencia de pago")
+var ErrNotPendingPickup = errors.New("el pedido no está pendiente de recogida en tienda")
 var ErrForbidden = errors.New("no tienes acceso a esa venta")
 
 // ErrInsufficientStock se devuelve cuando, al registrar la venta, un listing ya no
@@ -27,12 +28,25 @@ const (
 	PaymentCash     = "efectivo"
 	PaymentTransfer = "transferencia"
 	PaymentBold     = "bold"
+	// PaymentStore es el pedido de recogida que se paga en el local.
+	PaymentStore = "tienda"
 
 	// Estados de una venta. Una venta solo existe cuando el pago entró
 	// (`paid`), así sea en efectivo, por transferencia o aprobado por la
 	// pasarela. Un pago en línea que aún no se aprueba NO es una venta: es un
 	// CheckoutIntent (ver abajo).
 	StatusPaid = "paid"
+	// StatusPendingPickup es un pedido de recogida en tienda aún sin pagar: el
+	// stock está apartado y el cliente tiene hasta PickupDeadline para pagar y
+	// recogerlo. Es la única excepción a "una venta solo existe si está pagada".
+	StatusPendingPickup = "pending_pickup"
+	// StatusCancelled es un pedido de recogida que no se recogió a tiempo (o que
+	// el staff canceló); su stock ya volvió al inventario.
+	StatusCancelled = "cancelled"
+
+	// PickupBusinessDays son los días hábiles que el cliente tiene para pagar y
+	// recoger un pedido en tienda.
+	PickupBusinessDays = 2
 
 	// ShippingCostCOP es el cargo fijo de envío a domicilio. Se suma al
 	// total del pedido solo cuando fulfillment = shipping.
@@ -70,6 +84,12 @@ type Sale struct {
 	RequiresReview bool
 	// ReservationIDs son las reservas del carrito que sosteneron esta venta.
 	ReservationIDs []int64
+	// PickupDeadline es el límite para recoger un pedido pendiente en tienda
+	// (cero si no aplica).
+	PickupDeadline time.Time
+	// JustCreated es true solo en la llamada que creó el pedido (no se guarda):
+	// permite avisar al cliente una sola vez aunque el pago llegue por varias vías.
+	JustCreated bool
 }
 
 // SaleItem es una línea de la venta: un listing concreto que se vendió.

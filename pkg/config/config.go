@@ -32,6 +32,17 @@ type Config struct {
 	BoldEnv                string
 	BoldAPIBaseURL         string
 	BoldPaymentHoldMinutes int
+	// Correo transaccional (Resend). Sin API key los correos no se envían, pero
+	// la tienda funciona igual.
+	ResendAPIKey string
+	EmailFrom    string
+	// Respuestas de clientes (el remitente es no-reply) y datos del pie de los
+	// correos. EmailLogoURL debe ser un PNG público.
+	EmailReplyTo     string
+	EmailLogoURL     string
+	StoreContactMail string
+	StoreLocation    string
+	StoreSocial      string
 	// URL del frontend a la que Bold redirige tras el pago (…/carrito).
 	FrontendURL string
 }
@@ -67,6 +78,9 @@ func Load() (*Config, error) {
 		origins[i] = strings.TrimSpace(o)
 	}
 
+	frontendURL := envOr("FRONTEND_URL", "http://localhost:5173")
+	contactMail := envOr("STORE_CONTACT_EMAIL", "hola@trample.co")
+
 	return &Config{
 		Port:                 envOr("PORT", "8080"),
 		DatabaseURL:          dbURL,
@@ -93,7 +107,14 @@ func Load() (*Config, error) {
 		BoldEnv:                envOr("BOLD_ENV", "test"),
 		BoldAPIBaseURL:         envOr("BOLD_API_BASE_URL", "https://payments.api.bold.co"),
 		BoldPaymentHoldMinutes: holdMinutes,
-		FrontendURL:            envOr("FRONTEND_URL", "http://localhost:5173"),
+		ResendAPIKey:           envOr("RESEND_API_KEY", ""),
+		EmailFrom:              envOr("EMAIL_FROM", "Trample Store <no-reply@tramplestore.com>"),
+		EmailReplyTo:           envOr("EMAIL_REPLY_TO", contactMail),
+		EmailLogoURL:           envOr("EMAIL_LOGO_URL", strings.TrimRight(frontendURL, "/")+"/logos/email-logo.png"),
+		StoreContactMail:       contactMail,
+		StoreLocation:          envOr("STORE_LOCATION", "Barranquilla, Colombia"),
+		StoreSocial:            envOr("STORE_SOCIAL", "@tramplestore"),
+		FrontendURL:            frontendURL,
 	}, nil
 }
 

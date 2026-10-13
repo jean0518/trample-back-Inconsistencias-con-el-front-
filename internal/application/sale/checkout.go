@@ -76,6 +76,12 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 	if err := validateFulfillment(input); err != nil {
 		return CreateCheckoutResult{}, err
 	}
+	// La recogida en tienda se paga en el local (ver PaymentStore): no hay nada
+	// que cobrar en línea, y aceptarla aquí dejaría pagar con tarjeta un pedido
+	// que debe apartarse sin pago.
+	if input.Fulfillment == sale.FulfillmentPickup {
+		return CreateCheckoutResult{}, sale.ErrInvalidInput
+	}
 
 	cart, err := priceCart(ctx, uc.reservations, input.UserID, ids, input.Fulfillment)
 	if err != nil {

@@ -119,21 +119,22 @@ func (r *ListingRepository) ListAll(ctx context.Context, limit, offset int) ([]l
 // UpdateQuantity cambia la cantidad y ajusta el estado automáticamente:
 // quantity 0 ⇒ 'inactive'; quantity > 0 reactiva un listing 'inactive'.
 // Los listings solo manejan los estados 'active' o 'inactive'.
+// El filtro por seller_id se omite cuando input.AllSellers es true.
 func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error) {
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
 		UPDATE inventory_listings
-		SET quantity = $3,
+		SET quantity = $4,
 		    status = CASE
-		        WHEN $3 = 0 THEN 'inactive'
+		        WHEN $4 = 0 THEN 'inactive'
 		        WHEN status = 'inactive' THEN 'active'
 		        ELSE status
 		    END,
 		    updated_at = now()
-		WHERE id = $1 AND seller_id = $2
+		WHERE id = $1 AND ($2 OR seller_id = $3)
 		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
 			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
-	`, input.ID, input.SellerID, input.Quantity,
+	`, input.ID, input.AllSellers, input.SellerID, input.Quantity,
 	).Scan(
 		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
@@ -205,21 +206,21 @@ func (r *ListingRepository) Edit(ctx context.Context, input listing.EditInput) (
 	var l listing.Listing
 	err := r.db.QueryRow(ctx, `
 		UPDATE inventory_listings
-		SET quantity  = $3,
-		    price_usd = $4,
-		    price_cop = $5,
-		    language  = $6,
-		    owner_id  = $7,
+		SET quantity  = $4,
+		    price_usd = $5,
+		    price_cop = $6,
+		    language  = $7,
+		    owner_id  = $8,
 		    status = CASE
-		        WHEN $3 = 0 THEN 'inactive'
+		        WHEN $4 = 0 THEN 'inactive'
 		        WHEN status = 'inactive' THEN 'active'
 		        ELSE status
 		    END,
 		    updated_at = now()
-		WHERE id = $1 AND seller_id = $2
+		WHERE id = $1 AND ($2 OR seller_id = $3)
 		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
 			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
-	`, input.ID, input.SellerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language, input.OwnerID,
+	`, input.ID, input.AllSellers, input.SellerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language, input.OwnerID,
 	).Scan(
 		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
 		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
@@ -234,10 +235,10 @@ func (r *ListingRepository) Edit(ctx context.Context, input listing.EditInput) (
 	return l, nil
 }
 
-func (r *ListingRepository) Delete(ctx context.Context, id int64, sellerID string) error {
+func (r *ListingRepository) Delete(ctx context.Context, id int64, sellerID string, allSellers bool) error {
 	tag, err := r.db.Exec(ctx, `
-		DELETE FROM inventory_listings WHERE id = $1 AND seller_id = $2
-	`, id, sellerID)
+		DELETE FROM inventory_listings WHERE id = $1 AND ($2 OR seller_id = $3)
+	`, id, allSellers, sellerID)
 	if err != nil {
 		return fmt.Errorf("eliminar listing: %w", err)
 	}

@@ -226,7 +226,7 @@ func (h *ListingHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
 		ID:       id,
 		SellerID: user.ID,
 		Quantity: *body.Quantity,
-	})
+	}, user.Role, user.Permissions)
 	if err != nil {
 		if errors.Is(err, listing.ErrNotFound) {
 			Error(w, http.StatusNotFound, err.Error())
@@ -291,7 +291,7 @@ func (h *ListingHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		PriceUSD: body.PriceUSD,
 		Language: body.Language,
 		OwnerID:  body.OwnerID,
-	})
+	}, user.Role, user.Permissions)
 	if err != nil {
 		if errors.Is(err, listing.ErrNotFound) {
 			Error(w, http.StatusNotFound, err.Error())
@@ -330,8 +330,12 @@ func (h *ListingHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.delete.Execute(r.Context(), id, user.ID); err != nil {
-		Error(w, http.StatusNotFound, "listing no encontrado")
+	if err := h.delete.Execute(r.Context(), id, user.ID, user.Role, user.Permissions); err != nil {
+		if errors.Is(err, listing.ErrNotFound) {
+			Error(w, http.StatusNotFound, "listing no encontrado")
+			return
+		}
+		Error(w, http.StatusInternalServerError, "error interno del servidor")
 		return
 	}
 

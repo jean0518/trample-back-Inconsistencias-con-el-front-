@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"trample-back/internal/domain/auth"
 	"trample-back/internal/domain/listing"
 	"trample-back/internal/ports/out"
 )
@@ -26,7 +27,7 @@ func TestUpdateStockRechazaCantidadNegativa(t *testing.T) {
 	repo := &fakeListingRepo{}
 	uc := NewUpdateStockUseCase(repo)
 
-	if _, err := uc.Execute(context.Background(), listing.UpdateStockInput{ID: 1, SellerID: sellerUUID, Quantity: -1}); err == nil {
+	if _, err := uc.Execute(context.Background(), listing.UpdateStockInput{ID: 1, SellerID: sellerUUID, Quantity: -1}, "", nil); err == nil {
 		t.Fatal("esperaba error con cantidad negativa")
 	}
 	if repo.updated != nil {
@@ -38,11 +39,26 @@ func TestUpdateStockPermiteCero(t *testing.T) {
 	repo := &fakeListingRepo{}
 	uc := NewUpdateStockUseCase(repo)
 
-	l, err := uc.Execute(context.Background(), listing.UpdateStockInput{ID: 1, SellerID: sellerUUID, Quantity: 0})
+	l, err := uc.Execute(context.Background(), listing.UpdateStockInput{ID: 1, SellerID: sellerUUID, Quantity: 0}, "", nil)
 	if err != nil {
 		t.Fatalf("stock 0 debe permitirse: %v", err)
 	}
 	if l.Quantity != 0 || repo.updated.Quantity != 0 {
 		t.Fatal("la cantidad 0 no llegó al repo")
+	}
+	if repo.updated.AllSellers {
+		t.Fatal("un usuario sin permiso de inventario no debe gestionar todos los sellers")
+	}
+}
+
+func TestUpdateStockAdminGestionaTodosLosSellers(t *testing.T) {
+	repo := &fakeListingRepo{}
+	uc := NewUpdateStockUseCase(repo)
+
+	if _, err := uc.Execute(context.Background(), listing.UpdateStockInput{ID: 1, SellerID: sellerUUID, Quantity: 3}, auth.RoleAdmin, nil); err != nil {
+		t.Fatalf("el admin debe poder actualizar stock: %v", err)
+	}
+	if !repo.updated.AllSellers {
+		t.Fatal("el admin debe actualizar listings de cualquier vendedor")
 	}
 }

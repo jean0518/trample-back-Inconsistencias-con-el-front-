@@ -21,5 +21,8 @@ type ListingRepository interface {
 	AddQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error)
 	// Edit actualiza precio, cantidad, idioma y propietario de un listing.
 	Edit(ctx context.Context, input listing.EditInput) (listing.Listing, error)
-	Delete(ctx context.Context, id int64, sellerID string) error
+	// Delete elimina un listing. Con allSellers=true (admin o staff con permiso
+	// de inventario) no filtra por seller_id; con false solo borra los del
+	// vendedor indicado.
+	Delete(ctx context.Context, id int64, sellerID string, allSellers bool) error
 }

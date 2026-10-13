@@ -17,7 +17,7 @@ func NewEditListingUseCase(repo out.ListingRepository, trm out.TRMClient) *EditL
 	return &EditListingUseCase{repo: repo, trm: trm}
 }
 
-func (uc *EditListingUseCase) Execute(ctx context.Context, input listing.EditInput) (listing.Listing, error) {
+func (uc *EditListingUseCase) Execute(ctx context.Context, input listing.EditInput, role string, perms []string) (listing.Listing, error) {
 	if input.Quantity < 0 {
 		return listing.Listing{}, fmt.Errorf("la cantidad no puede ser negativa")
 	}
@@ -40,5 +40,8 @@ func (uc *EditListingUseCase) Execute(ctx context.Context, input listing.EditInp
 		return listing.Listing{}, fmt.Errorf("obtener TRM: %w", err)
 	}
 	input.PriceCOP = listing.StandardizedPriceCOP(input.PriceUSD, rate)
+	// El admin y el staff con acceso al inventario general editan listings de
+	// cualquier vendedor; el resto solo los propios.
+	input.AllSellers = hasGlobalInventoryAccess(role, perms)
 	return uc.repo.Edit(ctx, input)
 }

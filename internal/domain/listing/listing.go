@@ -56,20 +56,30 @@ type CreateInput struct {
 // UpdateStockInput modifica la cantidad de un listing. La regla de estado es
 // automática: quantity 0 ⇒ 'inactive'; volver a subir stock ⇒ 'active'.
 // Los listings solo manejan los estados 'active' o 'inactive'.
+//
+// AllSellers lo activa el use case cuando el usuario puede gestionar el
+// inventario general (admin o staff con permiso de inventario): en ese caso el
+// repositorio ignora el filtro por seller_id y actúa sobre el listing sin
+// importar quién lo creó.
 type UpdateStockInput struct {
-	ID       int64
-	SellerID string
-	Quantity int
+	ID         int64
+	SellerID   string
+	Quantity   int
+	AllSellers bool
 }
 
 // EditInput actualiza los campos editables de un listing: precio, cantidad,
 // idioma y propietario. price_cop se recalcula con la TRM en el use case.
+//
+// AllSellers cumple la misma función que en UpdateStockInput: permite que el
+// staff con acceso al inventario general edite listings de otros vendedores.
 type EditInput struct {
-	ID       int64
-	SellerID string
-	Quantity int
-	PriceUSD float64
-	PriceCOP float64
-	Language string
-	OwnerID  int64
+	ID         int64
+	SellerID   string
+	Quantity   int
+	PriceUSD   float64
+	PriceCOP   float64
+	Language   string
+	OwnerID    int64
+	AllSellers bool
 }

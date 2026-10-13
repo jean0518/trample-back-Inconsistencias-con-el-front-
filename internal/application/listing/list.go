@@ -15,9 +15,10 @@ func NewListListingsUseCase(repo out.ListingRepository) *ListListingsUseCase {
 	return &ListListingsUseCase{repo: repo}
 }
 
-// canSeeAllListings indica si el usuario ve el inventario general de todos los
-// vendedores: el admin siempre, y cualquier staff con el panel de inventario.
-func canSeeAllListings(role string, perms []string) bool {
+// hasGlobalInventoryAccess indica si el usuario ve y gestiona el inventario
+// general de todos los vendedores: el admin siempre, y cualquier staff con el
+// panel de inventario. Se usa tanto para listar como para eliminar/editar.
+func hasGlobalInventoryAccess(role string, perms []string) bool {
 	if role == auth.RoleAdmin {
 		return true
 	}
@@ -36,7 +37,7 @@ func (uc *ListListingsUseCase) Execute(ctx context.Context, role string, perms [
 	if limit <= 0 {
 		limit = 50
 	}
-	if canSeeAllListings(role, perms) {
+	if hasGlobalInventoryAccess(role, perms) {
 		return uc.repo.ListAll(ctx, limit, offset)
 	}
 	return uc.repo.ListBySeller(ctx, sellerID, limit, offset)

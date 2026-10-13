@@ -18,17 +18,15 @@ func NewDashboardRepository(db *pgxpool.Pool) *DashboardRepository {
 	return &DashboardRepository{db: db}
 }
 
-// InventoryKPIs resuelve los tres indicadores en una sola pasada. Los listings
-// se filtran por status = 'active' porque son los que ve la tienda; las cartas
-// se cuentan todas, tengan o no inventario.
+// InventoryKPIs resuelve los dos indicadores de inventario en una sola pasada.
+// Los listings se filtran por status = 'active' porque son los que ve la tienda.
 func (r *DashboardRepository) InventoryKPIs(ctx context.Context) (dashboard.KPIs, error) {
 	var kpis dashboard.KPIs
 	err := r.db.QueryRow(ctx, `
 		SELECT
-			(SELECT count(*) FROM cards),
 			(SELECT count(*) FROM inventory_listings WHERE status = 'active'),
 			(SELECT COALESCE(sum(quantity), 0) FROM inventory_listings WHERE status = 'active')
-	`).Scan(&kpis.CatalogCards, &kpis.ActiveListings, &kpis.InventoryUnits)
+	`).Scan(&kpis.ActiveListings, &kpis.InventoryUnits)
 	if err != nil {
 		return kpis, fmt.Errorf("consultar indicadores de inventario: %w", err)
 	}

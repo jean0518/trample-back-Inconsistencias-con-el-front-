@@ -53,7 +53,7 @@ var testNow = time.Date(2026, 3, 20, 15, 30, 0, 0, time.UTC)
 
 func TestExecuteMapeaLosKPIs(t *testing.T) {
 	repo := &fakeDashboardRepo{
-		kpis: dashboard.KPIs{CatalogCards: 120, ActiveListings: 8, InventoryUnits: 45},
+		kpis: dashboard.KPIs{ActiveListings: 8, InventoryUnits: 45},
 	}
 	uc := newTestUseCase(repo, testNow)
 
@@ -62,7 +62,7 @@ func TestExecuteMapeaLosKPIs(t *testing.T) {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
-	if got.CatalogCards != 120 || got.ActiveListings != 8 || got.InventoryUnits != 45 {
+	if got.ActiveListings != 8 || got.InventoryUnits != 45 {
 		t.Fatalf("KPIs no mapeados: %+v", got)
 	}
 }

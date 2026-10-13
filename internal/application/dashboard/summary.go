@@ -60,7 +60,6 @@ func (uc *SummaryUseCase) Execute(ctx context.Context, days, recent int) (dashbo
 	}
 
 	return dashboard.Summary{
-		CatalogCards:   kpis.CatalogCards,
 		ActiveListings: kpis.ActiveListings,
 		InventoryUnits: kpis.InventoryUnits,
 		OrdersToday:    totals.OrdersToday,

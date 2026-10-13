@@ -12,15 +12,12 @@ const (
 )
 
 // Summary es el estado completo del panel "Resumen": los indicadores de
-// catálogo e inventario, el conteo de pedidos y los más recientes.
+// inventario, el conteo de pedidos y los más recientes.
 //
 // Antes el frontend armaba estos números descargando hasta 500 ventas y hasta
 // 1000 listings para contarlos en el navegador; aquí llegan ya agregados desde
 // PostgreSQL.
 type Summary struct {
-	// CatalogCards cuenta todas las cartas registradas, tengan o no inventario
-	// y vengan de Scrydex o del alta manual.
-	CatalogCards int64 `json:"catalog_cards"`
 	// ActiveListings cuenta los listings visibles en la tienda (status 'active').
 	ActiveListings int64 `json:"active_listings"`
 	// InventoryUnits suma las unidades de esos mismos listings activos.
@@ -56,9 +53,8 @@ type DayCount struct {
 	TotalUSD float64 `json:"total_usd"`
 }
 
-// KPIs son los tres indicadores de catálogo e inventario.
+// KPIs son los dos indicadores de inventario.
 type KPIs struct {
-	CatalogCards   int64
 	ActiveListings int64
 	InventoryUnits int64
 }

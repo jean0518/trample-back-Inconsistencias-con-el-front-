@@ -16,8 +16,8 @@ func NewDashboardHandler(summary *appDashboard.SummaryUseCase) *DashboardHandler
 }
 
 // GetSummary devuelve en una sola llamada todo lo que muestra el panel
-// "Resumen": los KPI de catálogo e inventario, el conteo de pedidos, la serie
-// de los últimos días y la tabla de pedidos recientes.
+// "Resumen": los KPI de inventario, el conteo de pedidos, la serie de los
+// últimos días y la tabla de pedidos recientes.
 //
 // Antes cada tarjeta del panel bajaba su listado completo y lo contaba en el
 // navegador; aquí los agregados se resuelven en PostgreSQL.

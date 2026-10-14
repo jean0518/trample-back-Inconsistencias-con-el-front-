@@ -225,7 +225,7 @@ func TestPriceCart_RedondeaElPrecio(t *testing.T) {
 	reservations := &fakeReservations{list: []reservation.Reservation{
 		cartReservation(1, testUser, 12345.9, 3, 2),
 	}}
-	cart, err := priceCart(context.Background(), reservations, testUser, []int64{1}, sale.FulfillmentPickup)
+	cart, err := priceCart(context.Background(), reservations, nil, testUser, []int64{1}, nil, sale.FulfillmentPickup)
 	if err != nil {
 		t.Fatalf("priceCart: %v", err)
 	}

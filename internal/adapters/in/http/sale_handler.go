@@ -61,6 +61,14 @@ type saleItemResponse struct {
 	PriceUSD  float64 `json:"price_usd"`
 }
 
+// productItemResponse es una línea de producto propio de la tienda en un pedido.
+type productItemResponse struct {
+	ProductID *int64 `json:"product_id"`
+	Title     string `json:"title"`
+	Quantity  int    `json:"quantity"`
+	PriceCOP  int64  `json:"price_cop"`
+}
+
 type saleResponse struct {
 	ID            int64   `json:"id"`
 	TotalCOP      int64   `json:"total_cop"`
@@ -83,6 +91,9 @@ type saleResponse struct {
 	// tienda (RFC3339). Vacío en los demás pedidos.
 	PickupDeadline string             `json:"pickup_deadline,omitempty"`
 	Items          []saleItemResponse `json:"items"`
+	// ProductItems son las líneas de productos propios de la tienda (siempre
+	// presente; vacío si el pedido es solo de cartas).
+	ProductItems []productItemResponse `json:"product_items"`
 }
 
 // boldCheckoutResponse son los datos que el frontend necesita para pintar el
@@ -140,6 +151,12 @@ func newSaleResponse(s sale.Sale) saleResponse {
 	for _, it := range s.Items {
 		items = append(items, newSaleItemResponse(it))
 	}
+	productItems := make([]productItemResponse, 0, len(s.ProductItems))
+	for _, it := range s.ProductItems {
+		productItems = append(productItems, productItemResponse{
+			ProductID: it.ProductID, Title: it.Title, Quantity: it.Quantity, PriceCOP: it.PriceCOP,
+		})
+	}
 	return saleResponse{
 		ID:               s.ID,
 		TotalCOP:         s.TotalCOP,
@@ -159,6 +176,7 @@ func newSaleResponse(s sale.Sale) saleResponse {
 		RequiresReview:   s.RequiresReview,
 		PickupDeadline:   formatTime(s.PickupDeadline),
 		Items:            items,
+		ProductItems:     productItems,
 	}
 }
 
@@ -173,11 +191,14 @@ func formatTime(t time.Time) string {
 
 type confirmSaleRequest struct {
 	ReservationIDs []int64 `json:"reservation_ids"`
-	Fulfillment    string  `json:"fulfillment"`    // pickup | shipping
-	Address        string  `json:"address"`        // requerido si shipping
-	City           string  `json:"city"`           // requerido si shipping
-	Phone          string  `json:"phone"`          // requerido si shipping
-	PaymentMethod  string  `json:"payment_method"` // efectivo | transferencia (staff) | tienda (recogida, se paga en el local)
+	// ProductReservationIDs son las reservas del carrito de productos
+	// (GET /cart/products) que se pagan en el mismo pedido.
+	ProductReservationIDs []int64 `json:"product_reservation_ids"`
+	Fulfillment           string  `json:"fulfillment"`    // pickup | shipping
+	Address               string  `json:"address"`        // requerido si shipping
+	City                  string  `json:"city"`           // requerido si shipping
+	Phone                 string  `json:"phone"`          // requerido si shipping
+	PaymentMethod         string  `json:"payment_method"` // efectivo | transferencia (staff) | tienda (recogida, se paga en el local)
 }
 
 // confirmInputFromRequest traduce el body a la entrada del dominio. PayerEmail
@@ -192,8 +213,10 @@ func confirmInputFromRequest(r *http.Request, user AuthUser, body confirmSaleReq
 		Phone:         body.Phone,
 		PaymentMethod: body.PaymentMethod,
 		IsAdmin:       isStaff,
-		PayerEmail:    user.Email,
-		PayerName:     strings.TrimSpace(user.FirstName + " " + user.LastName),
+
+		ProductReservationIDs: body.ProductReservationIDs,
+		PayerEmail:            user.Email,
+		PayerName:             strings.TrimSpace(user.FirstName + " " + user.LastName),
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	appDashboard "trample-back/internal/application/dashboard"
 	appListing "trample-back/internal/application/listing"
 	appOwner "trample-back/internal/application/owner"
+	appProduct "trample-back/internal/application/product"
 	appReservation "trample-back/internal/application/reservation"
 	appSale "trample-back/internal/application/sale"
 	"trample-back/pkg/config"
@@ -105,6 +106,13 @@ func main() {
 	cardImageRepo := postgres.NewCardImageRepositoryPG(pool, imageStorage)
 	manualListingUC := appCatalog.NewManualListingUseCase(manualCardRepo, listingRepo, ownerRepo, cardImageRepo, trmClient)
 	newExpansionUC := appCatalog.NewNewExpansionUseCase(expansionRepo)
+	// Productos propios de la tienda: módulo aparte de las cartas, con su propio
+	// repositorio y fotos (mismo bucket de Supabase, carpeta products/).
+	productRepo := postgres.NewProductRepositoryPG(pool, imageStorage)
+	manageProductsUC := appProduct.NewManageUseCase(productRepo)
+	queryProductsUC := appProduct.NewQueryUseCase(productRepo)
+	productReservationRepo := postgres.NewProductReservationRepositoryPG(pool)
+	productCartUC := appProduct.NewCartUseCase(productReservationRepo)
 	priceRefresherUC := appCatalog.NewPriceRefresher(searchUC, cardRepo, log)
 	// Aviso por Telegram de los precios del inventario que cambian con el
 	// webhook. Si faltan las variables queda desactivado.
@@ -130,7 +138,7 @@ func main() {
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	// El pago en línea no registra el pedido: deja listo el checkout con la
 	// referencia de la pasarela. El pedido se crea al aprobarse el pago.
-	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL)
+	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL).WithProducts(productReservationRepo)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
 	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
 	// Correos de compra (Resend). Sin RESEND_API_KEY se omiten con un log.
@@ -149,7 +157,7 @@ func main() {
 	purchaseNotifier := appSale.NewPurchaseNotifier(userRepo, mailer)
 	verifyEmailUC := appAuth.NewVerifyEmailUseCase(userRepo, mailer, cfg.FrontendURL)
 	registerUC := appAuth.NewRegisterUseCase(userRepo, verifyEmailUC)
-	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo).WithNotifier(purchaseNotifier)
+	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo).WithProducts(productReservationRepo).WithNotifier(purchaseNotifier)
 	pickupOrdersUC := appSale.NewPickupOrdersUseCase(saleRepo, purchaseNotifier)
 	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
 	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
@@ -177,6 +185,8 @@ func main() {
 		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC),
 		Inventory:      httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
 		CardImages:     httpadapter.NewCardImageHandler(cardImageRepo),
+		Products:       httpadapter.NewProductHandler(manageProductsUC, queryProductsUC, productRepo),
+		ProductCart:    httpadapter.NewProductCartHandler(productCartUC),
 		AuthMiddleware: authMiddleware,
 		AllowedOrigins: cfg.AllowedOrigins,
 	})
@@ -200,6 +210,8 @@ func main() {
 
 	// Libera periódicamente las reservas (stock temporal de 5 min) vencidas.
 	go releaseExpiredLoop(log, reservationRepo)
+	// Lo mismo para las reservas de productos.
+	go releaseExpiredProductsLoop(log, productReservationRepo)
 
 	// Cierra los pagos en línea que el cliente nunca llegó a completar dentro de
 	// la ventana de retención, devolviendo el stock reservado.
@@ -281,6 +293,24 @@ func releaseExpiredLoop(log *slog.Logger, repo *postgres.ReservationRepository) 
 		}
 		if n > 0 {
 			log.Info("reservas expiradas liberadas", slog.Int64("count", n))
+		}
+	}
+}
+
+// releaseExpiredProductsLoop libera las reservas de productos vencidas (5 minutos).
+func releaseExpiredProductsLoop(log *slog.Logger, repo *postgres.ProductReservationRepositoryPG) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		n, err := repo.ReleaseExpired(ctx)
+		cancel()
+		if err != nil {
+			log.Error("liberar reservas de productos expiradas", slog.Any("error", err))
+			continue
+		}
+		if n > 0 {
+			log.Info("reservas de productos expiradas liberadas", slog.Int64("count", n))
 		}
 	}
 }

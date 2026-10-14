@@ -68,13 +68,19 @@ func extensionByContentType(contentType string) string {
 // cachea con agresividad, así que con una clave estable por carta una
 // re-subida seguiría mostrando el frontal viejo.
 func objectPath(cardID int64, extension string) string {
+	return objectPathFor("cards", cardID, extension)
+}
+
+// objectPathFor es objectPath con el prefijo del módulo, para que las fotos de
+// productos no compartan carpeta con los frontales de cartas.
+func objectPathFor(prefix string, id int64, extension string) string {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		// Si falla la entropía se usa el tiempo: es peor que el nombre tenga
 		// menos aleatoriedad, pero no tanto como perder la subida entera.
-		return fmt.Sprintf("cards/%d/%d.%s", cardID, time.Now().UnixMilli(), extension)
+		return fmt.Sprintf("%s/%d/%d.%s", prefix, id, time.Now().UnixMilli(), extension)
 	}
-	return fmt.Sprintf("cards/%d/%d-%s.%s", cardID, time.Now().UnixMilli(), hex.EncodeToString(buf[:]), extension)
+	return fmt.Sprintf("%s/%d/%d-%s.%s", prefix, id, time.Now().UnixMilli(), hex.EncodeToString(buf[:]), extension)
 }
 
 // escapeKey escapa cada segmento de la clave por separado. La clave lleva "/"
@@ -94,11 +100,19 @@ func (s *Storage) PublicURL(objectKey string) string {
 
 // Put sube el frontal y devuelve la URL pública.
 func (s *Storage) Put(ctx context.Context, cardID int64, upload catalog.ImageUpload) (string, error) {
+	return s.put(ctx, objectPath(cardID, extensionByContentType(upload.ContentType)), upload)
+}
+
+// PutProductImage sube una foto de producto bajo products/{id}/.
+func (s *Storage) PutProductImage(ctx context.Context, productID int64, upload catalog.ImageUpload) (string, error) {
+	return s.put(ctx, objectPathFor("products", productID, extensionByContentType(upload.ContentType)), upload)
+}
+
+func (s *Storage) put(ctx context.Context, objectKey string, upload catalog.ImageUpload) (string, error) {
 	if len(upload.Content) == 0 {
 		return "", fmt.Errorf("la imagen está vacía")
 	}
 
-	objectKey := objectPath(cardID, extensionByContentType(upload.ContentType))
 	endpoint := fmt.Sprintf("%s/storage/v1/object/%s/%s",
 		s.baseURL, url.PathEscape(s.bucket), escapeKey(objectKey))
 

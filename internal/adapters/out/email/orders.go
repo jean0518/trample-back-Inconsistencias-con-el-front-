@@ -80,11 +80,19 @@ func (m *Mailer) base(name, reference string, totalCOP int64) view {
 	}
 }
 
-func orderLines(items []sale.SaleItem) []orderLine {
-	lines := make([]orderLine, 0, len(items))
+// orderLines arma las líneas del correo: primero las cartas y después los
+// productos propios de la tienda (que no llevan idioma).
+func orderLines(items []sale.SaleItem, productItems []sale.ProductItem) []orderLine {
+	lines := make([]orderLine, 0, len(items)+len(productItems))
 	for _, it := range items {
 		lines = append(lines, orderLine{
 			Name: it.CardName, Language: it.Language, Quantity: it.Quantity,
+			Subtotal: formatCOP(it.PriceCOP * int64(it.Quantity)),
+		})
+	}
+	for _, it := range productItems {
+		lines = append(lines, orderLine{
+			Name: it.Title, Quantity: it.Quantity,
 			Subtotal: formatCOP(it.PriceCOP * int64(it.Quantity)),
 		})
 	}
@@ -93,7 +101,7 @@ func orderLines(items []sale.SaleItem) []orderLine {
 
 func (m *Mailer) SendOrderConfirmed(ctx context.Context, to, name string, s sale.Sale) error {
 	v := m.base(name, fmt.Sprintf("#%d", s.ID), s.TotalCOP)
-	v.Lines = orderLines(s.Items)
+	v.Lines = orderLines(s.Items, s.ProductItems)
 	v.TotalLabel = "Total pagado"
 	if s.Fulfillment == sale.FulfillmentShipping {
 		v.Shipping = formatCOP(s.ShippingCOP)

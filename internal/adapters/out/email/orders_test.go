@@ -77,3 +77,22 @@ func TestRenderVerificacion(t *testing.T) {
 		t.Error("el nombre no se escapó en el HTML")
 	}
 }
+
+func TestOrderLinesIncluyeProductosSinIdioma(t *testing.T) {
+	lines := orderLines(
+		[]sale.SaleItem{{CardName: "Pikachu", Language: "Inglés", Quantity: 2, PriceCOP: 1000}},
+		[]sale.ProductItem{{Title: "Caja de sobres", Quantity: 1, PriceCOP: 450000}},
+	)
+	if len(lines) != 2 {
+		t.Fatalf("líneas = %d, se esperaban 2", len(lines))
+	}
+	if lines[0].Name != "Pikachu" || lines[0].Language != "Inglés" {
+		t.Errorf("carta: %+v", lines[0])
+	}
+	if lines[1].Name != "Caja de sobres" || lines[1].Language != "" || lines[1].Quantity != 1 {
+		t.Errorf("producto: %+v", lines[1])
+	}
+	if lines[1].Subtotal == "" {
+		t.Error("el producto debe llevar subtotal")
+	}
+}

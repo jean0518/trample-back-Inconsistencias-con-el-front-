@@ -24,7 +24,7 @@ func formatDeadline(t time.Time) string {
 
 func (m *Mailer) pickupView(name string, s sale.Sale) view {
 	v := m.base(name, fmt.Sprintf("#%d", s.ID), s.TotalCOP)
-	v.Lines = orderLines(s.Items)
+	v.Lines = orderLines(s.Items, s.ProductItems)
 	if !s.PickupDeadline.IsZero() {
 		v.Deadline = formatDeadline(s.PickupDeadline)
 	}

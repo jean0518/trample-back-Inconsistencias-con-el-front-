@@ -196,8 +196,7 @@ func (r *ProductReservationRepositoryPG) ReleaseExpired(ctx context.Context) (in
 
 // closeProductCheckoutsHoldingTx cierra los checkouts abiertos que incluyen la
 // reserva de producto indicada. No libera reservas: el siguiente "Pagar" crea un
-// checkout con el carrito nuevo. (Los checkouts con productos llegan en la fase 3;
-// hasta entonces no hay ninguno que cerrar.)
+// checkout con el carrito nuevo.
 func closeProductCheckoutsHoldingTx(ctx context.Context, tx pgx.Tx, reservationID int64) error {
 	if _, err := tx.Exec(ctx, `
 		UPDATE payment_checkouts SET status = 'expired'

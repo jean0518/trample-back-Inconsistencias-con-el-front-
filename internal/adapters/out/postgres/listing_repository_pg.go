@@ -122,24 +122,39 @@ func (r *ListingRepository) ListAll(ctx context.Context, limit, offset int) ([]l
 // El filtro por seller_id se omite cuando input.AllSellers es true.
 func (r *ListingRepository) UpdateQuantity(ctx context.Context, input listing.UpdateStockInput) (listing.Listing, error) {
 	var l listing.Listing
-	err := r.db.QueryRow(ctx, `
-		UPDATE inventory_listings
-		SET quantity = $4,
-		    status = CASE
-		        WHEN $4 = 0 THEN 'inactive'
-		        WHEN status = 'inactive' THEN 'active'
-		        ELSE status
-		    END,
-		    updated_at = now()
-		WHERE id = $1 AND ($2 OR seller_id = $3)
-		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
-			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
-	`, input.ID, input.AllSellers, input.SellerID, input.Quantity,
-	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
-		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
-		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
-	)
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		// Se bloquea la fila para comparar con lo que había antes de cambiarla.
+		var oldQty int
+		err := tx.QueryRow(ctx, `
+			SELECT quantity FROM inventory_listings
+			WHERE id = $1 AND ($2 OR seller_id = $3) FOR UPDATE
+		`, input.ID, input.AllSellers, input.SellerID).Scan(&oldQty)
+		if err != nil {
+			return err
+		}
+		err = tx.QueryRow(ctx, `
+			UPDATE inventory_listings
+			SET quantity = $2,
+			    status = CASE
+			        WHEN $2 = 0 THEN 'inactive'
+			        WHEN status = 'inactive' THEN 'active'
+			        ELSE status
+			    END,
+			    updated_at = now()
+			WHERE id = $1
+			RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+				COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
+		`, input.ID, input.Quantity,
+		).Scan(
+			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
+			&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
+			&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
+		)
+		if err != nil {
+			return err
+		}
+		return closeCheckoutsIfStockBelowReservedTx(ctx, tx, l.ID, l.Quantity)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return listing.Listing{}, fmt.Errorf("listing %d: %w", input.ID, listing.ErrNotFound)
@@ -204,28 +219,50 @@ func (r *ListingRepository) AddQuantity(ctx context.Context, input listing.Updat
 
 func (r *ListingRepository) Edit(ctx context.Context, input listing.EditInput) (listing.Listing, error) {
 	var l listing.Listing
-	err := r.db.QueryRow(ctx, `
-		UPDATE inventory_listings
-		SET quantity  = $4,
-		    price_usd = $5,
-		    price_cop = $6,
-		    language  = $7,
-		    owner_id  = $8,
-		    status = CASE
-		        WHEN $4 = 0 THEN 'inactive'
-		        WHEN status = 'inactive' THEN 'active'
-		        ELSE status
-		    END,
-		    updated_at = now()
-		WHERE id = $1 AND ($2 OR seller_id = $3)
-		RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
-			COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
-	`, input.ID, input.AllSellers, input.SellerID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language, input.OwnerID,
-	).Scan(
-		&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
-		&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
-		&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
-	)
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var (
+			oldPrice float64
+			oldLang  string
+		)
+		err := tx.QueryRow(ctx, `
+			SELECT price_cop, language FROM inventory_listings
+			WHERE id = $1 AND ($2 OR seller_id = $3) FOR UPDATE
+		`, input.ID, input.AllSellers, input.SellerID).Scan(&oldPrice, &oldLang)
+		if err != nil {
+			return err
+		}
+		err = tx.QueryRow(ctx, `
+			UPDATE inventory_listings
+			SET quantity  = $2,
+			    price_usd = $3,
+			    price_cop = $4,
+			    language  = $5,
+			    owner_id  = $6,
+			    status = CASE
+			        WHEN $2 = 0 THEN 'inactive'
+			        WHEN status = 'inactive' THEN 'active'
+			        ELSE status
+			    END,
+			    updated_at = now()
+			WHERE id = $1
+			RETURNING id, seller_id, variant_id, owner_id, quantity, price_usd, price_cop, status, language, created_at, updated_at,
+				COALESCE((SELECT u.first_name || ' ' || u.last_name FROM users u WHERE u.id = inventory_listings.seller_id), '') AS seller_name
+		`, input.ID, input.Quantity, input.PriceUSD, input.PriceCOP, input.Language, input.OwnerID,
+		).Scan(
+			&l.ID, &l.SellerID, &l.VariantID, &l.OwnerID,
+			&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.Language,
+			&l.CreatedAt, &l.UpdatedAt, &l.SellerName,
+		)
+		if err != nil {
+			return err
+		}
+		// Un cambio de precio o de idioma deja desactualizado lo que Bold iba a
+		// cobrar; uno de cantidad, solo si el stock ya no cubre las reservas.
+		if l.PriceCOP != oldPrice || l.Language != oldLang {
+			return closeCheckoutsOfListingTx(ctx, tx, l.ID)
+		}
+		return closeCheckoutsIfStockBelowReservedTx(ctx, tx, l.ID, l.Quantity)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return listing.Listing{}, fmt.Errorf("listing %d: %w", input.ID, listing.ErrNotFound)

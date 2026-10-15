@@ -59,30 +59,54 @@ func (r *ProductRepositoryPG) Create(ctx context.Context, createdBy string, in p
 	return r.GetByID(ctx, id)
 }
 
-// Update reemplaza los campos editables.
+// Update reemplaza los campos editables. Si cambia el precio, o el stock deja de
+// cubrir las reservas, cierra los pagos abiertos que incluían el producto: Bold
+// iba a cobrar un monto o unas unidades que ya no corresponden.
 func (r *ProductRepositoryPG) Update(ctx context.Context, id int64, in product.Input) (product.Product, error) {
-	tag, err := r.db.Exec(ctx, `
-		UPDATE products
-		   SET title = $2, description = $3, price_cop = $4, stock = $5, updated_at = now()
-		 WHERE id = $1`,
-		id, in.Title, in.Description, in.PriceCOP, in.Stock)
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var oldPrice int64
+		if err := tx.QueryRow(ctx, `SELECT price_cop FROM products WHERE id = $1 FOR UPDATE`, id).Scan(&oldPrice); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return product.ErrNotFound
+			}
+			return fmt.Errorf("bloquear producto: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE products
+			   SET title = $2, description = $3, price_cop = $4, stock = $5, updated_at = now()
+			 WHERE id = $1`,
+			id, in.Title, in.Description, in.PriceCOP, in.Stock); err != nil {
+			return fmt.Errorf("actualizar producto: %w", err)
+		}
+		if in.PriceCOP != oldPrice {
+			return closeCheckoutsOfProductTx(ctx, tx, id)
+		}
+		return closeProductCheckoutsIfStockBelowReservedTx(ctx, tx, id, in.Stock)
+	})
 	if err != nil {
-		return product.Product{}, fmt.Errorf("actualizar producto: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return product.Product{}, product.ErrNotFound
+		return product.Product{}, err
 	}
 	return r.GetByID(ctx, id)
 }
 
-// SetStatus oculta o publica el producto.
+// SetStatus oculta o publica el producto. Ocultarlo cierra los pagos abiertos
+// que lo incluían: un producto oculto ya no se puede vender.
 func (r *ProductRepositoryPG) SetStatus(ctx context.Context, id int64, status string) (product.Product, error) {
-	tag, err := r.db.Exec(ctx, `UPDATE products SET status = $2, updated_at = now() WHERE id = $1`, id, status)
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE products SET status = $2, updated_at = now() WHERE id = $1`, id, status)
+		if err != nil {
+			return fmt.Errorf("cambiar estado del producto: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return product.ErrNotFound
+		}
+		if status != product.StatusActive {
+			return closeCheckoutsOfProductTx(ctx, tx, id)
+		}
+		return nil
+	})
 	if err != nil {
-		return product.Product{}, fmt.Errorf("cambiar estado del producto: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return product.Product{}, product.ErrNotFound
+		return product.Product{}, err
 	}
 	return r.GetByID(ctx, id)
 }
@@ -106,6 +130,12 @@ func (r *ProductRepositoryPG) Delete(ctx context.Context, id int64) error {
 		}
 		if sold {
 			return product.ErrHasSales
+		}
+
+		// Un pago abierto con este producto ya no se puede cumplir: se cierra
+		// antes de borrar las reservas que lo sostenían.
+		if err := closeCheckoutsOfProductTx(ctx, tx, id); err != nil {
+			return err
 		}
 
 		// Las reservas ya no tienen sentido sin producto. Las activas se borran

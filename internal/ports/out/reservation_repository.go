@@ -32,6 +32,13 @@ type ReservationRepository interface {
 	// reservation.ErrNotFound si la reserva no existe, no pertenece al usuario
 	// o no está activa.
 	Remove(ctx context.Context, userID string, id int64) error
+	// UpdateQuantity fija la cantidad de una reserva activa y vigente del
+	// usuario, conservando su expires_at. Para subir valida contra el stock
+	// comprable sumando lo que la propia reserva ya aparta. Devuelve
+	// reservation.ErrNotFound si no existe, no es suya o venció;
+	// reservation.ErrCheckoutInProgress si está en un pago abierto; y
+	// reservation.ErrInsufficientStock si no alcanza.
+	UpdateQuantity(ctx context.Context, userID string, id int64, quantity int) (reservation.Reservation, error)
 	// ReleaseExpired libera todas las reservas 'active' ya vencidas para que
 	// su stock vuelva a estar disponible. Devuelve la cantidad de reservas
 	// liberadas.

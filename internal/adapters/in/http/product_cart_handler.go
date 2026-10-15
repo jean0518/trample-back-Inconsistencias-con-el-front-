@@ -25,7 +25,10 @@ type productCartItemResponse struct {
 	ProductID int64  `json:"product_id"`
 	Title     string `json:"title"`
 	Quantity  int    `json:"quantity"`
-	PriceCOP  int64  `json:"price_cop"`
+	// MaxQuantity es el tope del selector de cantidad: stock comprable para
+	// esta línea, contando lo que ya aparta.
+	MaxQuantity int   `json:"max_quantity"`
+	PriceCOP    int64 `json:"price_cop"`
 	// LineTotalCOP es price_cop × quantity, para que el front no recalcule.
 	LineTotalCOP int64  `json:"line_total_cop"`
 	Image        string `json:"image"`
@@ -34,7 +37,7 @@ type productCartItemResponse struct {
 
 func toProductCartItem(r product.Reservation) productCartItemResponse {
 	return productCartItemResponse{
-		ID: r.ID, ProductID: r.ProductID, Title: r.Title, Quantity: r.Quantity,
+		ID: r.ID, ProductID: r.ProductID, Title: r.Title, Quantity: r.Quantity, MaxQuantity: r.MaxQuantity,
 		PriceCOP: r.PriceCOP, LineTotalCOP: r.PriceCOP * int64(r.Quantity),
 		Image: r.ImageURL, ExpiresAt: r.ExpiresAt.UTC().Format(time.RFC3339),
 	}
@@ -96,6 +99,50 @@ func (h *ProductCartHandler) List(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, toProductCartItem(it))
 	}
 	JSON(w, http.StatusOK, resp)
+}
+
+// UpdateQuantity cambia la cantidad de un producto apartado. No renueva los 5
+// minutos de la reserva; bajar la cantidad libera stock.
+//
+//	@Router /cart/products/{id} [patch]
+func (h *ProductCartHandler) UpdateQuantity(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id, ok := parseProductID(r, "id")
+	if !ok {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	var body struct {
+		Quantity int `json:"quantity"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	if body.Quantity < 1 {
+		Error(w, http.StatusBadRequest, "quantity debe ser al menos 1")
+		return
+	}
+
+	res, err := h.cart.UpdateQuantity(r.Context(), user.ID, id, body.Quantity)
+	switch {
+	case errors.Is(err, product.ErrInsufficientStock):
+		Error(w, http.StatusConflict, "producto agotado o sin stock suficiente")
+	case errors.Is(err, product.ErrCheckoutInProgress):
+		Error(w, http.StatusConflict, "hay un pago en curso con este producto")
+	case errors.Is(err, product.ErrNotFound):
+		Error(w, http.StatusNotFound, "reserva no encontrada")
+	case errors.Is(err, product.ErrInvalidQuantity):
+		Error(w, http.StatusBadRequest, "quantity debe ser al menos 1")
+	case err != nil:
+		internalError(w, err)
+	default:
+		JSON(w, http.StatusOK, toProductCartItem(res))
+	}
 }
 
 // Remove suelta una reserva de producto.

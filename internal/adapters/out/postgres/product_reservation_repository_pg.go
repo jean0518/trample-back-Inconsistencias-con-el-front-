@@ -90,6 +90,8 @@ func (r *ProductReservationRepositoryPG) Reserve(ctx context.Context, in product
 
 		res.UserID = in.UserID
 		res.ProductID = in.ProductID
+		// reserved incluía lo que esta línea tenía antes del upsert.
+		res.MaxQuantity = stock - reserved - in.Quantity + res.Quantity
 		res.Title = title
 		res.PriceCOP = priceCOP
 		return tx.QueryRow(ctx, `
@@ -120,6 +122,9 @@ func (r *ProductReservationRepositoryPG) ListActiveByUserAndIDs(ctx context.Cont
 func (r *ProductReservationRepositoryPG) listActive(ctx context.Context, userID string, ids []int64) ([]product.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT pr.id, pr.product_id, pr.quantity, pr.expires_at, p.title, p.price_cop,
+		       GREATEST(p.stock - COALESCE((SELECT SUM(o.quantity) FROM product_reservations o
+		                                     WHERE o.product_id = p.id AND o.status = 'active'
+		                                       AND o.id <> pr.id), 0), 0)::int,
 		       COALESCE((SELECT pi.url FROM product_images pi
 		                  WHERE pi.product_id = p.id AND pi.url <> ''
 		                  ORDER BY pi.position LIMIT 1), '')
@@ -138,7 +143,7 @@ func (r *ProductReservationRepositoryPG) listActive(ctx context.Context, userID 
 	for rows.Next() {
 		res := product.Reservation{UserID: userID}
 		if err := rows.Scan(&res.ID, &res.ProductID, &res.Quantity, &res.ExpiresAt,
-			&res.Title, &res.PriceCOP, &res.ImageURL); err != nil {
+			&res.Title, &res.PriceCOP, &res.MaxQuantity, &res.ImageURL); err != nil {
 			return nil, fmt.Errorf("escanear reserva de producto: %w", err)
 		}
 		out = append(out, res)
@@ -180,6 +185,112 @@ func (r *ProductReservationRepositoryPG) Remove(ctx context.Context, userID stri
 		// Quitar la línea cambia el total: el pago abierto que la incluía ya no sirve.
 		return closeProductCheckoutsHoldingTx(ctx, tx, id)
 	})
+}
+
+// UpdateQuantity fija la cantidad de una reserva activa del usuario. Bloquea
+// primero el producto y después la reserva, el mismo orden que Reserve, para
+// serializar contra otras reservas del producto. expires_at no se toca.
+func (r *ProductReservationRepositoryPG) UpdateQuantity(ctx context.Context, userID string, id int64, quantity int) (product.Reservation, error) {
+	if quantity < 1 {
+		return product.Reservation{}, product.ErrInvalidQuantity
+	}
+
+	var res product.Reservation
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var productID int64
+		err := tx.QueryRow(ctx, `
+			SELECT product_id FROM product_reservations
+			 WHERE id = $1 AND user_id = $2 AND status = 'active' AND expires_at > now()`,
+			id, userID).Scan(&productID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return product.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("buscar reserva de producto a editar: %w", err)
+		}
+
+		var (
+			stock  int
+			status string
+		)
+		if err := tx.QueryRow(ctx, `
+			SELECT stock, status, title, price_cop
+			  FROM products WHERE id = $1
+			   FOR UPDATE`, productID).Scan(&stock, &status, &res.Title, &res.PriceCOP); err != nil {
+			return fmt.Errorf("bloquear producto de la reserva: %w", err)
+		}
+		// Un producto oculto no aparece en el carrito: para el cliente no existe.
+		if status != product.StatusActive {
+			return product.ErrNotFound
+		}
+
+		// Se relee con la reserva bloqueada: entre la primera lectura y el
+		// bloqueo del producto pudo venderse, quitarse o vencer.
+		err = tx.QueryRow(ctx, `
+			SELECT quantity, expires_at FROM product_reservations
+			 WHERE id = $1 AND user_id = $2 AND status = 'active' AND expires_at > now()
+			   FOR UPDATE`, id, userID).Scan(&res.Quantity, &res.ExpiresAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return product.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("bloquear reserva de producto a editar: %w", err)
+		}
+
+		// Con el pago en curso el monto ya se le mostró al cliente en Bold.
+		var inCheckout bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM payment_checkouts
+				 WHERE status = 'open' AND expires_at > now() AND $1 = ANY(product_reservation_ids))`,
+			id).Scan(&inCheckout); err != nil {
+			return fmt.Errorf("buscar pago en curso de la reserva de producto: %w", err)
+		}
+		if inCheckout {
+			return product.ErrCheckoutInProgress
+		}
+
+		// Lo que esta línea ya aparta cuenta como disponible para ella: pasar de
+		// 2 a 3 necesita 1 libre, no 3.
+		var reservedByOthers int
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(quantity), 0)::int
+			  FROM product_reservations
+			 WHERE product_id = $1 AND status = 'active' AND id <> $2`, productID, id).Scan(&reservedByOthers); err != nil {
+			return fmt.Errorf("calcular reservado: %w", err)
+		}
+		res.MaxQuantity = max(stock-reservedByOthers, 0)
+		// Bajar siempre se permite, aunque el stock haya quedado por debajo.
+		if quantity > res.Quantity && quantity > res.MaxQuantity {
+			return product.ErrInsufficientStock
+		}
+
+		res.ID = id
+		res.UserID = userID
+		res.ProductID = productID
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE((SELECT url FROM product_images
+			                  WHERE product_id = $1 AND url <> ''
+			                  ORDER BY position LIMIT 1), '')`, productID).Scan(&res.ImageURL); err != nil {
+			return fmt.Errorf("leer imagen del producto: %w", err)
+		}
+		if quantity == res.Quantity {
+			return nil
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE product_reservations SET quantity = $2 WHERE id = $1`, id, quantity); err != nil {
+			return fmt.Errorf("actualizar cantidad de la reserva de producto: %w", err)
+		}
+		res.Quantity = quantity
+		// Un checkout abierto ya vencido sigue apuntando a la línea con el monto
+		// viejo; se cierra igual que al agregar o quitar.
+		return closeProductCheckoutsHoldingTx(ctx, tx, id)
+	})
+	if err != nil {
+		return product.Reservation{}, err
+	}
+	return res, nil
 }
 
 // ReleaseExpired libera las reservas vencidas. El stock nunca se descontó al

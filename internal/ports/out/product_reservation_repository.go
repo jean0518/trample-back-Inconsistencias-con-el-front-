@@ -27,6 +27,13 @@ type ProductReservationRepository interface {
 	// Remove libera una reserva activa del usuario. Devuelve product.ErrNotFound
 	// si no existe, no es suya o ya no está activa.
 	Remove(ctx context.Context, userID string, id int64) error
+	// UpdateQuantity fija la cantidad de una reserva activa y vigente del
+	// usuario, conservando su expires_at. Para subir valida contra lo comprable
+	// sumando lo que la propia reserva ya aparta. Devuelve product.ErrNotFound si
+	// no existe, no es suya, venció o el producto está oculto;
+	// product.ErrCheckoutInProgress si está en un pago abierto; y
+	// product.ErrInsufficientStock si no alcanza.
+	UpdateQuantity(ctx context.Context, userID string, id int64, quantity int) (product.Reservation, error)
 	// ReleaseExpired libera las reservas activas ya vencidas y devuelve cuántas.
 	ReleaseExpired(ctx context.Context) (int64, error)
 }

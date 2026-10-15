@@ -9,6 +9,14 @@ var ErrNotFound = errors.New("reserva no encontrada")
 var ErrInsufficientStock = errors.New("stock insuficiente para reservar")
 var ErrInvalidListing = errors.New("no hay listing activo disponible para esa carta e idioma")
 
+// ErrInvalidQuantity: la cantidad de una línea del carrito debe ser ≥ 1 (para
+// quitarla está Remove).
+var ErrInvalidQuantity = errors.New("la cantidad debe ser al menos 1")
+
+// ErrCheckoutInProgress: la reserva está en un pago abierto de Bold y no se
+// puede editar mientras tanto.
+var ErrCheckoutInProgress = errors.New("la reserva tiene un pago en curso")
+
 // Reservation representa el stock temporal de 5 minutos reservado para un
 // cliente cuando agrega una carta a su carrito.
 type Reservation struct {
@@ -20,6 +28,10 @@ type Reservation struct {
 	VariantName string
 	Language    string
 	Quantity    int
+	// MaxQuantity es el tope al que se puede llevar esta línea: el stock del
+	// listing menos lo que tienen apartado los demás (incluye lo que ya aparta
+	// esta reserva).
+	MaxQuantity int
 	PriceUSD    float64
 	PriceCOP    float64
 	CardImage   string

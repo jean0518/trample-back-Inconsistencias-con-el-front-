@@ -40,6 +40,16 @@ func (uc *CartUseCase) List(ctx context.Context, userID string) ([]product.Reser
 	return items, nil
 }
 
+// UpdateQuantity cambia la cantidad de una línea del carrito sin renovar los 5
+// minutos, para que editar no sirva para alargar la reserva indefinidamente.
+// Bajar libera stock; para quitar la línea está Remove.
+func (uc *CartUseCase) UpdateQuantity(ctx context.Context, userID string, id int64, quantity int) (product.Reservation, error) {
+	if quantity < 1 {
+		return product.Reservation{}, product.ErrInvalidQuantity
+	}
+	return uc.repo.UpdateQuantity(ctx, userID, id, quantity)
+}
+
 // Remove suelta una reserva del usuario.
 func (uc *CartUseCase) Remove(ctx context.Context, userID string, id int64) error {
 	return uc.repo.Remove(ctx, userID, id)

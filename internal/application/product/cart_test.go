@@ -72,6 +72,23 @@ func (f *fakeReservations) Remove(_ context.Context, userID string, id int64) er
 	delete(f.active, id)
 	return nil
 }
+func (f *fakeReservations) UpdateQuantity(_ context.Context, userID string, id int64, quantity int) (product.Reservation, error) {
+	r, ok := f.active[id]
+	if !ok || r.UserID != userID {
+		return product.Reservation{}, product.ErrNotFound
+	}
+	others := 0
+	for _, o := range f.active {
+		if o.ProductID == r.ProductID && o.ID != id {
+			others += o.Quantity
+		}
+	}
+	if quantity > r.Quantity && quantity > f.stock[r.ProductID]-others {
+		return product.Reservation{}, product.ErrInsufficientStock
+	}
+	r.Quantity = quantity
+	return *r, nil
+}
 func (f *fakeReservations) ReleaseExpired(context.Context) (int64, error) { return 0, nil }
 
 func TestCartAddUsesFiveMinuteHold(t *testing.T) {
@@ -156,5 +173,47 @@ func TestCartListAndRemove(t *testing.T) {
 	}
 	if err := uc.Remove(ctx, "u1", res.ID); !errors.Is(err, product.ErrNotFound) {
 		t.Errorf("segunda vez debía ser ErrNotFound: %v", err)
+	}
+}
+
+func TestCartUpdateQuantityCountsOwnReservation(t *testing.T) {
+	repo := newFakeReservations()
+	repo.stock[1] = 3
+	uc := NewCartUseCase(repo)
+	ctx := context.Background()
+
+	mine, _ := uc.Add(ctx, product.ReserveInput{UserID: "u1", ProductID: 1, Quantity: 2})
+	// Queda 1 libre: pasar de 2 a 3 solo necesita esa unidad.
+	if got, err := uc.UpdateQuantity(ctx, "u1", mine.ID, 3); err != nil || got.Quantity != 3 {
+		t.Fatalf("2→3 con 1 libre: %+v %v", got, err)
+	}
+	if _, err := uc.UpdateQuantity(ctx, "u1", mine.ID, 4); !errors.Is(err, product.ErrInsufficientStock) {
+		t.Errorf("4 supera el stock: %v", err)
+	}
+	// Bajar libera stock para otro cliente.
+	if _, err := uc.UpdateQuantity(ctx, "u1", mine.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uc.Add(ctx, product.ReserveInput{UserID: "u2", ProductID: 1, Quantity: 2}); err != nil {
+		t.Errorf("las 2 unidades liberadas debían poder reservarse: %v", err)
+	}
+	if _, err := uc.UpdateQuantity(ctx, "otro", mine.ID, 1); !errors.Is(err, product.ErrNotFound) {
+		t.Errorf("no puede editar la reserva de otro: %v", err)
+	}
+}
+
+func TestCartUpdateQuantityRejectsBelowOne(t *testing.T) {
+	repo := newFakeReservations()
+	repo.stock[1] = 3
+	uc := NewCartUseCase(repo)
+	res, _ := uc.Add(context.Background(), product.ReserveInput{UserID: "u1", ProductID: 1, Quantity: 2})
+
+	for _, q := range []int{0, -1} {
+		if _, err := uc.UpdateQuantity(context.Background(), "u1", res.ID, q); !errors.Is(err, product.ErrInvalidQuantity) {
+			t.Errorf("quantity=%d: esperaba ErrInvalidQuantity, got %v", q, err)
+		}
+	}
+	if repo.active[res.ID].Quantity != 2 {
+		t.Errorf("no debía tocar la reserva: %+v", repo.active[res.ID])
 	}
 }

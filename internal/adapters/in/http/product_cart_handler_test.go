@@ -29,7 +29,10 @@ func (s stubReservations) ListActiveByUserAndIDs(context.Context, string, []int6
 }
 func (s stubReservations) ExtendExpiry(context.Context, string, []int64, int) error { return s.err }
 func (s stubReservations) Remove(context.Context, string, int64) error              { return s.err }
-func (s stubReservations) ReleaseExpired(context.Context) (int64, error)            { return 0, nil }
+func (s stubReservations) UpdateQuantity(context.Context, string, int64, int) (product.Reservation, error) {
+	return s.res, s.err
+}
+func (s stubReservations) ReleaseExpired(context.Context) (int64, error) { return 0, nil }
 
 func cartRequest(method, target, body string) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -106,5 +109,46 @@ func TestProductResponseHidesStockFromPublic(t *testing.T) {
 	_ = json.Unmarshal(adm, &m)
 	if m["stock"] != float64(9) || m["reserved"] != float64(4) {
 		t.Errorf("el admin debe ver stock y reserved: %v", m)
+	}
+}
+
+func TestProductCartUpdateQuantityStatusCodes(t *testing.T) {
+	ok := product.Reservation{ID: 7, ProductID: 3, Title: "Caja", Quantity: 3, MaxQuantity: 5, PriceCOP: 1000, ExpiresAt: time.Unix(0, 0)}
+	cases := []struct {
+		name string
+		repo stubReservations
+		path string
+		body string
+		want int
+	}{
+		{"ok", stubReservations{res: ok}, "7", `{"quantity":3}`, http.StatusOK},
+		{"sin stock", stubReservations{err: product.ErrInsufficientStock}, "7", `{"quantity":9}`, http.StatusConflict},
+		{"pago en curso", stubReservations{err: product.ErrCheckoutInProgress}, "7", `{"quantity":2}`, http.StatusConflict},
+		{"no existe o vencida", stubReservations{err: product.ErrNotFound}, "7", `{"quantity":2}`, http.StatusNotFound},
+		{"cero", stubReservations{}, "7", `{"quantity":0}`, http.StatusBadRequest},
+		{"id inválido", stubReservations{}, "abc", `{"quantity":2}`, http.StatusBadRequest},
+		{"json inválido", stubReservations{}, "7", `nope`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := NewProductCartHandler(appProduct.NewCartUseCase(c.repo))
+			req := cartRequest(http.MethodPatch, "/cart/products/"+c.path, c.body)
+			req.SetPathValue("id", c.path)
+			rec := httptest.NewRecorder()
+			h.UpdateQuantity(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, c.want, rec.Body)
+			}
+			if c.want != http.StatusOK {
+				return
+			}
+			var got productCartItemResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.LineTotalCOP != 3000 || got.MaxQuantity != 5 {
+				t.Errorf("respuesta: %+v", got)
+			}
+		})
 	}
 }

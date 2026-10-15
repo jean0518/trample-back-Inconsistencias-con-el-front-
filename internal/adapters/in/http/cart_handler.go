@@ -18,13 +18,16 @@ func NewCartHandler(cart *appReservation.CartUseCase) *CartHandler {
 }
 
 type cartItemResponse struct {
-	ID          int64   `json:"id"`
-	ListingID   int64   `json:"listing_id"`
-	CardID      int64   `json:"card_id"`
-	CardName    string  `json:"card_name"`
-	VariantName string  `json:"variant_name"`
-	Language    string  `json:"language"` // idioma de la carta en el carrito
-	Quantity    int     `json:"quantity"`
+	ID          int64  `json:"id"`
+	ListingID   int64  `json:"listing_id"`
+	CardID      int64  `json:"card_id"`
+	CardName    string `json:"card_name"`
+	VariantName string `json:"variant_name"`
+	Language    string `json:"language"` // idioma de la carta en el carrito
+	Quantity    int    `json:"quantity"`
+	// MaxQuantity es el tope del selector de cantidad: stock comprable para
+	// esta línea, contando lo que ya aparta.
+	MaxQuantity int     `json:"max_quantity"`
 	PriceUSD    float64 `json:"price_usd"`
 	PriceCOP    float64 `json:"price_cop"`
 	CardImage   string  `json:"card_image"`
@@ -40,6 +43,7 @@ func newCartItemResponse(r reservation.Reservation) cartItemResponse {
 		VariantName: r.VariantName,
 		Language:    r.Language,
 		Quantity:    r.Quantity,
+		MaxQuantity: r.MaxQuantity,
 		PriceUSD:    r.PriceUSD,
 		PriceCOP:    r.PriceCOP,
 		CardImage:   r.CardImage,
@@ -134,6 +138,65 @@ func (h *CartHandler) GetCart(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, newCartItemResponse(it))
 	}
 	JSON(w, http.StatusOK, resp)
+}
+
+type updateCartItemRequest struct {
+	Quantity int `json:"quantity"`
+}
+
+// UpdateCartItem cambia la cantidad de una línea del carrito. No renueva los 5
+// minutos de la reserva; bajar la cantidad libera stock.
+//
+//	@Summary      Editar cantidad en el carrito
+//	@Tags         cart
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path      int                    true  "ID de la reserva"
+//	@Param        body  body      updateCartItemRequest  true  "Nueva cantidad (≥ 1)"
+//	@Success      200   {object}  cartItemResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      401   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}  "Stock insuficiente o pago en curso"
+//	@Router       /cart/{id} [patch]
+func (h *CartHandler) UpdateCartItem(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	var body updateCartItemRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	if body.Quantity < 1 {
+		Error(w, http.StatusBadRequest, "quantity debe ser al menos 1")
+		return
+	}
+
+	res, err := h.cart.UpdateQuantity(r.Context(), user.ID, id, body.Quantity)
+	switch {
+	case errors.Is(err, reservation.ErrInsufficientStock):
+		Error(w, http.StatusConflict, "stock insuficiente para esta carta e idioma")
+	case errors.Is(err, reservation.ErrCheckoutInProgress):
+		Error(w, http.StatusConflict, "hay un pago en curso con esta carta")
+	case errors.Is(err, reservation.ErrNotFound):
+		Error(w, http.StatusNotFound, "reserva no encontrada")
+	case errors.Is(err, reservation.ErrInvalidQuantity):
+		Error(w, http.StatusBadRequest, "quantity debe ser al menos 1")
+	case err != nil:
+		internalError(w, err)
+	default:
+		JSON(w, http.StatusOK, newCartItemResponse(res))
+	}
 }
 
 // RemoveFromCart libera una reserva del carrito y restaura el stock.

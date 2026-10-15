@@ -211,6 +211,8 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 		return reservation.Reservation{}, err
 	}
 
+	// reserved incluía lo que esta línea tenía antes del upsert.
+	res.MaxQuantity = totalStock - reserved - input.Quantity + res.Quantity
 	res.CardID = info.CardID
 	res.CardName = info.CardName
 	res.VariantName = info.VariantName
@@ -221,11 +223,20 @@ func (r *ReservationRepository) Reserve(ctx context.Context, input reservation.R
 	return res, nil
 }
 
+// maxQuantitySQL calcula, para la reserva `cr`, hasta cuántas unidades puede
+// llegar: el stock del listing (0 si no está activo) menos lo que reservan los
+// demás. Es el max_quantity del ítem del carrito.
+const maxQuantitySQL = `GREATEST(
+		       CASE WHEN il.status = 'active' THEN il.quantity ELSE 0 END
+		       - COALESCE((SELECT SUM(o.quantity) FROM cart_reservations o
+		                   WHERE o.listing_id = il.id AND o.status = 'active' AND o.id <> cr.id), 0),
+		       0)::int`
+
 func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID string) ([]reservation.Reservation, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
-		       il.language, il.price_usd, il.price_cop,
+		       il.language, il.price_usd, il.price_cop, ` + maxQuantitySQL + `,
 		       COALESCE(
 		           (SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = lcv.id AND vi.small_url <> '' LIMIT 1),
 		           (SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
@@ -249,7 +260,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID str
 		if err := rows.Scan(
 			&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 			&res.CardID, &res.CardName, &res.VariantName, &res.ListingID,
-			&res.Language, &res.PriceUSD, &res.PriceCOP,
+			&res.Language, &res.PriceUSD, &res.PriceCOP, &res.MaxQuantity,
 			&res.CardImage,
 		); err != nil {
 			return nil, fmt.Errorf("escanear reserva: %w", err)
@@ -263,7 +274,7 @@ func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, user
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
-		       il.language, il.price_usd, il.price_cop,
+		       il.language, il.price_usd, il.price_cop, ` + maxQuantitySQL + `,
 		       COALESCE(
 		           (SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = lcv.id AND vi.small_url <> '' LIMIT 1),
 		           (SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
@@ -287,7 +298,7 @@ func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, user
 		if err := rows.Scan(
 			&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
 			&res.CardID, &res.CardName, &res.VariantName, &res.ListingID,
-			&res.Language, &res.PriceUSD, &res.PriceCOP,
+			&res.Language, &res.PriceUSD, &res.PriceCOP, &res.MaxQuantity,
 			&res.CardImage,
 		); err != nil {
 			return nil, fmt.Errorf("escanear reserva por ids: %w", err)
@@ -468,6 +479,144 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID string, id in
 	}
 
 	return tx.Commit(ctx)
+}
+
+// UpdateQuantity fija la cantidad de una reserva activa del usuario en una
+// transacción. Bloquea primero el listing y después la reserva, el mismo orden
+// que Reserve, para serializar contra otras reservas del listing sin
+// interbloquearse. expires_at no se toca.
+func (r *ReservationRepository) UpdateQuantity(ctx context.Context, userID string, id int64, quantity int) (reservation.Reservation, error) {
+	if quantity < 1 {
+		return reservation.Reservation{}, reservation.ErrInvalidQuantity
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return reservation.Reservation{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var listingID int64
+	err = tx.QueryRow(ctx, `
+		SELECT listing_id FROM cart_reservations
+		WHERE id = $1 AND user_id = $2 AND status = 'active' AND expires_at > now()
+	`, id, userID).Scan(&listingID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return reservation.Reservation{}, reservation.ErrNotFound
+		}
+		return reservation.Reservation{}, fmt.Errorf("buscar reserva a editar: %w", err)
+	}
+
+	// Un listing pausado no tiene stock comprable: se puede bajar, no subir.
+	var stock int
+	if err := tx.QueryRow(ctx, `
+		SELECT CASE WHEN status = 'active' THEN quantity ELSE 0 END
+		FROM inventory_listings WHERE id = $1
+		FOR UPDATE
+	`, listingID).Scan(&stock); err != nil {
+		return reservation.Reservation{}, fmt.Errorf("bloquear listing de la reserva: %w", err)
+	}
+
+	// Se relee con la reserva bloqueada: entre la primera lectura y el bloqueo
+	// del listing pudo venderse, quitarse o vencer.
+	var res reservation.Reservation
+	err = tx.QueryRow(ctx, `
+		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
+		       c.id, c.name, cv.variant_name, il.language, il.price_usd, il.price_cop,
+		       COALESCE(
+		           (SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = cv.id AND vi.small_url <> '' LIMIT 1),
+		           (SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
+		           ''
+		       )
+		FROM cart_reservations cr
+		JOIN inventory_listings il ON il.id = cr.listing_id
+		JOIN card_variants cv ON cv.id = il.variant_id
+		JOIN cards c ON c.id = cv.card_id
+		WHERE cr.id = $1 AND cr.user_id = $2 AND cr.status = 'active' AND cr.expires_at > now()
+		FOR UPDATE OF cr
+	`, id, userID).Scan(
+		&res.ID, &res.ListingID, &res.Quantity, &res.ExpiresAt,
+		&res.CardID, &res.CardName, &res.VariantName, &res.Language,
+		&res.PriceUSD, &res.PriceCOP, &res.CardImage,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return reservation.Reservation{}, reservation.ErrNotFound
+		}
+		return reservation.Reservation{}, fmt.Errorf("bloquear reserva a editar: %w", err)
+	}
+
+	// Con el pago en curso el monto ya se le mostró al cliente en Bold.
+	var inCheckout bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM payment_checkouts
+			WHERE status = 'open' AND expires_at > now() AND $1 = ANY(reservation_ids)
+		)
+	`, id).Scan(&inCheckout); err != nil {
+		return reservation.Reservation{}, fmt.Errorf("buscar pago en curso de la reserva: %w", err)
+	}
+	if inCheckout {
+		return reservation.Reservation{}, reservation.ErrCheckoutInProgress
+	}
+
+	// Lo que esta línea ya aparta cuenta como disponible para ella: pasar de 2
+	// a 3 necesita 1 libre, no 3.
+	var reservedByOthers int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(quantity), 0)::int FROM cart_reservations
+		WHERE listing_id = $1 AND status = 'active' AND id <> $2
+	`, listingID, id).Scan(&reservedByOthers); err != nil {
+		return reservation.Reservation{}, fmt.Errorf("calcular reservado del listing: %w", err)
+	}
+	res.MaxQuantity = max(stock-reservedByOthers, 0)
+	// Bajar siempre se permite, aunque el stock haya quedado por debajo.
+	if quantity > res.Quantity && quantity > res.MaxQuantity {
+		return reservation.Reservation{}, reservation.ErrInsufficientStock
+	}
+
+	previous := res.Quantity
+	if quantity == previous {
+		return res, tx.Commit(ctx)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE cart_reservations SET quantity = $2 WHERE id = $1
+	`, id, quantity); err != nil {
+		return reservation.Reservation{}, fmt.Errorf("actualizar cantidad de la reserva: %w", err)
+	}
+	res.Quantity = quantity
+	// Un checkout abierto ya vencido sigue apuntando a la línea con el monto
+	// viejo; se cierra igual que al agregar o quitar.
+	if err := closeCheckoutsHoldingTx(ctx, tx, id); err != nil {
+		return reservation.Reservation{}, err
+	}
+
+	// Historico: la diferencia se reservó (subió) o se devolvió (bajó).
+	status, delta := reservation.LogReserved, quantity-previous
+	if delta < 0 {
+		status, delta = reservation.LogReturned, -delta
+	}
+	if err := logReservation(ctx, tx, reservation.ReservationLog{
+		ReservationID: id,
+		UserID:        userID,
+		CardID:        res.CardID,
+		CardName:      res.CardName,
+		VariantName:   res.VariantName,
+		Language:      res.Language,
+		Quantity:      delta,
+		PriceUSD:      res.PriceUSD,
+		PriceCOP:      res.PriceCOP,
+		Status:        status,
+	}); err != nil {
+		return reservation.Reservation{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return reservation.Reservation{}, err
+	}
+	return res, nil
 }
 
 func (r *ReservationRepository) ReleaseExpired(ctx context.Context) (int64, error) {

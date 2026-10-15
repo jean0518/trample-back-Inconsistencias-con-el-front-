@@ -22,6 +22,9 @@ type fakeProductReservations struct {
 func (f *fakeProductReservations) Reserve(context.Context, product.ReserveInput, int) (product.Reservation, error) {
 	return product.Reservation{}, errors.New("no usado")
 }
+func (f *fakeProductReservations) UpdateQuantity(context.Context, string, int64, int) (product.Reservation, error) {
+	return product.Reservation{}, errors.New("no usado")
+}
 func (f *fakeProductReservations) ListActiveByUser(context.Context, string) ([]product.Reservation, error) {
 	return f.list, nil
 }

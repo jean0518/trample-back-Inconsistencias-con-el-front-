@@ -160,12 +160,14 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireAuth)
 		r.Get("/", h.Cart.GetCart)
 		r.Post("/", h.Cart.AddToCart)
+		r.Patch("/{id}", h.Cart.UpdateCartItem)
 		r.Delete("/{id}", h.Cart.RemoveFromCart)
 
 		// Carrito de productos: mismas reglas de reserva (5 min), rutas aparte
 		// para no tocar el contrato del carrito de cartas.
 		r.Get("/products", h.ProductCart.List)
 		r.Post("/products", h.ProductCart.Add)
+		r.Patch("/products/{id}", h.ProductCart.UpdateQuantity)
 		r.Delete("/products/{id}", h.ProductCart.Remove)
 	})
 

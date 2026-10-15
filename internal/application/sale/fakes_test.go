@@ -69,6 +69,9 @@ func (f *fakeReservations) ListActiveByUser(context.Context, string) ([]reservat
 func (f *fakeReservations) Remove(context.Context, string, int64) error {
 	return errors.New("no implementado en el fake")
 }
+func (f *fakeReservations) UpdateQuantity(context.Context, string, int64, int) (reservation.Reservation, error) {
+	return reservation.Reservation{}, errors.New("no implementado en el fake")
+}
 func (f *fakeReservations) ReleaseExpired(context.Context) (int64, error) {
 	return 0, errors.New("no implementado en el fake")
 }

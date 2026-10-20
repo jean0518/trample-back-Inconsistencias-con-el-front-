@@ -43,6 +43,9 @@ type Config struct {
 	StoreContactMail string
 	StoreLocation    string
 	StoreSocial      string
+	// StoreWhatsApp es el número de WhatsApp de la tienda con indicativo. Los
+	// correos invitan a escribir ahí para cambios o cancelaciones.
+	StoreWhatsApp string
 	// URL del frontend a la que Bold redirige tras el pago (…/carrito).
 	FrontendURL string
 }
@@ -114,7 +117,9 @@ func Load() (*Config, error) {
 		StoreContactMail:       contactMail,
 		StoreLocation:          envOr("STORE_LOCATION", "Barranquilla, Colombia"),
 		StoreSocial:            envOr("STORE_SOCIAL", "@tramplestore"),
-		FrontendURL:            frontendURL,
+		// Mismo número que el frontend (src/constants/site.ts).
+		StoreWhatsApp: envOr("STORE_WHATSAPP", "573150655368"),
+		FrontendURL:   frontendURL,
 	}, nil
 }
 

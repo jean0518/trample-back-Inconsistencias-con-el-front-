@@ -47,7 +47,8 @@ type ReservationRepository interface {
 	// reservar de una carta/idioma, opcionalmente filtrando por acabado
 	// (variantName).
 	FindListingForReserve(ctx context.Context, cardID int64, language, variantName string) (reservation.ListingInfo, error)
-	// ListReservationLogs devuelve el historial de reservas (más recientes
-	// primero), opcionalmente filtrado por estado. Se usa en el panel admin.
-	ListReservationLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error)
+	// ListReservationLogs devuelve el historial de reservas de cartas y de
+	// productos (más recientes primero) con filtros, y el total sin paginar. Se
+	// usa en el panel admin.
+	ListReservationLogs(ctx context.Context, f reservation.LogFilter) ([]reservation.ReservationLog, int, error)
 }

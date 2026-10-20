@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"trample-back/internal/domain/payment"
+	"trample-back/internal/domain/reservation"
 	"trample-back/internal/domain/sale"
 
 	"github.com/jackc/pgx/v5"
@@ -134,13 +135,25 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 	created.Items = make([]sale.SaleItem, 0, len(s.Items))
 	for _, it := range s.Items {
 		var item sale.SaleItem
+		// La variante viene de la reserva; si falta (checkouts anteriores a este
+		// campo) se toma del listing. El juego y la expansión salen de la carta.
 		err := tx.QueryRow(ctx, `
-			INSERT INTO sale_items (sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			RETURNING listing_id, card_id, card_name, language, quantity, price_cop, price_usd
-		`, created.ID, it.ListingID, it.CardID, it.CardName, it.Language, it.Quantity, it.PriceCOP, it.PriceUSD).Scan(
+			INSERT INTO sale_items (sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
+			                        variant_name, game_code, game_name, expansion_name)
+			SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+			       COALESCE(NULLIF($9, ''), (SELECT cv.variant_name FROM inventory_listings il
+			                                 JOIN card_variants cv ON cv.id = il.variant_id WHERE il.id = $2)),
+			       g.code, g.name, e.name
+			FROM (SELECT 1) one
+			LEFT JOIN cards c ON c.id = $3
+			LEFT JOIN games g ON g.id = c.game_id
+			LEFT JOIN expansions e ON e.id = c.expansion_id
+			RETURNING listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
+			          COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, '')
+		`, created.ID, it.ListingID, it.CardID, it.CardName, it.Language, it.Quantity, it.PriceCOP, it.PriceUSD, it.VariantName).Scan(
 			&item.ListingID, &item.CardID, &item.CardName,
 			&item.Language, &item.Quantity, &item.PriceCOP, &item.PriceUSD,
+			&item.VariantName, &item.GameCode, &item.GameName, &item.ExpansionName,
 		)
 		if err != nil {
 			return sale.Sale{}, fmt.Errorf("crear item de venta: %w", err)
@@ -199,11 +212,18 @@ func nullableIDs(ids []int64) any {
 	return ids
 }
 
+// saleSelect lee la venta (alias s) con el nombre y correo del comprador (alias
+// u). Quien la use debe calificar las columnas con s. en sus filtros.
 const saleSelect = `
-	SELECT id, user_id, total_cop, total_usd, shipping_cop, shipping_usd, fulfillment, address, city, phone, payment_method, status, created_at,
-	       COALESCE(payment_reference, ''), COALESCE(bold_payment_id, ''), COALESCE(paid_at, to_timestamp(0)),
-	       requires_review, reservation_ids, COALESCE(pickup_deadline, to_timestamp(0))
-	FROM sales
+	SELECT s.id, s.user_id, s.total_cop, s.total_usd, s.shipping_cop, s.shipping_usd, s.fulfillment, s.address, s.city, s.phone,
+	       s.payment_method, s.status, s.created_at,
+	       COALESCE(s.payment_reference, ''), COALESCE(s.bold_payment_id, ''), COALESCE(s.paid_at, to_timestamp(0)),
+	       s.requires_review, s.reservation_ids, COALESCE(s.pickup_deadline, to_timestamp(0)),
+	       COALESCE(s.cancel_requested_at, to_timestamp(0)), COALESCE(s.shipped_at, to_timestamp(0)),
+	       COALESCE(s.carrier, ''), COALESCE(s.tracking_number, ''), COALESCE(s.delivered_at, to_timestamp(0)),
+	       COALESCE(trim(concat_ws(' ', u.first_name, u.last_name)), ''), COALESCE(u.email, '')
+	FROM sales s
+	LEFT JOIN users u ON u.id = s.user_id
 `
 
 func scanSale(row pgx.Row) (sale.Sale, error) {
@@ -212,13 +232,23 @@ func scanSale(row pgx.Row) (sale.Sale, error) {
 		&s.ID, &s.UserID, &s.TotalCOP, &s.TotalUSD, &s.ShippingCOP, &s.ShippingUSD, &s.Fulfillment, &s.Address,
 		&s.City, &s.Phone, &s.PaymentMethod, &s.Status, &s.CreatedAt,
 		&s.PaymentReference, &s.BoldPaymentID, &s.PaidAt, &s.RequiresReview, &s.ReservationIDs, &s.PickupDeadline,
+		&s.CancelRequestedAt, &s.ShippedAt, &s.Carrier, &s.TrackingNumber, &s.DeliveredAt,
+		&s.CustomerName, &s.CustomerEmail,
 	)
+	// Las fechas ausentes llegan como epoch (COALESCE): se dejan en cero para
+	// que IsZero() siga significando "no aplica".
+	for _, t := range []*time.Time{&s.PaidAt, &s.PickupDeadline, &s.CancelRequestedAt, &s.ShippedAt, &s.DeliveredAt} {
+		if t.Unix() == 0 {
+			*t = time.Time{}
+		}
+	}
 	return s, err
 }
 
 func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	rows, err := r.db.Query(ctx, `
-		SELECT listing_id, card_id, card_name, language, quantity, price_cop, price_usd
+		SELECT listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
+		       COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, '')
 		FROM sale_items WHERE sale_id = $1 ORDER BY id
 	`, s.ID)
 	if err != nil {
@@ -230,7 +260,8 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	for rows.Next() {
 		var it sale.SaleItem
 		if err := rows.Scan(&it.ListingID, &it.CardID, &it.CardName,
-			&it.Language, &it.Quantity, &it.PriceCOP, &it.PriceUSD); err != nil {
+			&it.Language, &it.Quantity, &it.PriceCOP, &it.PriceUSD,
+			&it.VariantName, &it.GameCode, &it.GameName, &it.ExpansionName); err != nil {
 			return err
 		}
 		items = append(items, it)
@@ -244,7 +275,7 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 
 // FindByID devuelve una venta con sus items.
 func (r *SaleRepository) FindByID(ctx context.Context, id int64) (sale.Sale, error) {
-	s, err := scanSale(r.db.QueryRow(ctx, saleSelect+` WHERE id = $1`, id))
+	s, err := scanSale(r.db.QueryRow(ctx, saleSelect+` WHERE s.id = $1`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sale.Sale{}, sale.ErrPaymentNotFound
@@ -266,7 +297,7 @@ const checkoutColumns = `reference, user_id::text, total_cop, total_usd, shippin
 	       fulfillment, address, city, phone, items, reservation_ids, status,
 	       COALESCE(sale_id, 0), COALESCE(bold_payment_id, ''), created_at,
 	       COALESCE(paid_at, to_timestamp(0)), expires_at,
-	       product_items, product_reservation_ids`
+	       product_items, product_reservation_ids, COALESCE(payment_pending_at, to_timestamp(0))`
 
 const checkoutSelect = `SELECT ` + checkoutColumns + ` FROM payment_checkouts `
 
@@ -282,10 +313,15 @@ func scanCheckout(row pgx.Row) (sale.CheckoutIntent, error) {
 		&c.Reference, &c.UserID, &c.TotalCOP, &c.TotalUSD, &c.ShippingCOP, &c.ShippingUSD,
 		&c.Fulfillment, &c.Address, &c.City, &c.Phone, &items, &c.ReservationIDs, &c.Status,
 		&c.SaleID, &c.BoldPaymentID, &c.CreatedAt, &c.PaidAt, &c.ExpiresAt,
-		&productItems, &c.ProductReservationIDs,
+		&productItems, &c.ProductReservationIDs, &c.PaymentPendingAt,
 	)
 	if err != nil {
 		return sale.CheckoutIntent{}, err
+	}
+	for _, t := range []*time.Time{&c.PaidAt, &c.PaymentPendingAt} {
+		if t.Unix() == 0 {
+			*t = time.Time{}
+		}
 	}
 	if err := json.Unmarshal(items, &c.Items); err != nil {
 		return sale.CheckoutIntent{}, fmt.Errorf("leer items del checkout %s: %w", c.Reference, err)
@@ -513,10 +549,10 @@ func (r *SaleRepository) RejectPayment(ctx context.Context, reference string) (s
 	}
 
 	if status == sale.CheckoutOpen {
-		if err := releaseReservationsTx(ctx, tx, reservationIDs); err != nil {
+		if err := releaseReservationsTx(ctx, tx, reservationIDs, reservation.ReturnPaymentFailed); err != nil {
 			return sale.CheckoutIntent{}, err
 		}
-		if err := releaseProductReservationsTx(ctx, tx, productReservationIDs); err != nil {
+		if err := releaseProductReservationsTx(ctx, tx, productReservationIDs, reservation.ReturnPaymentFailed); err != nil {
 			return sale.CheckoutIntent{}, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -553,60 +589,54 @@ func (r *SaleRepository) CloseOpenCheckouts(ctx context.Context, userID string) 
 }
 
 // ExpireCheckouts cierra los checkouts que el cliente no pagó dentro de la
-// ventana de retención y libera el stock que retinían.
-func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duration) (int64, error) {
+// ventana de retención, libera el stock que retenían y los devuelve.
+func (r *SaleRepository) ExpireCheckouts(ctx context.Context, grace time.Duration) ([]sale.CheckoutIntent, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	type expired struct {
-		reference             string
-		reservationIDs        []int64
-		productReservationIDs []int64
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT reference, reservation_ids, product_reservation_ids
-		FROM payment_checkouts
+	rows, err := tx.Query(ctx, checkoutSelect+`
 		WHERE status = $1 AND expires_at <= now() - make_interval(secs => $2)
 		FOR UPDATE
 	`, sale.CheckoutOpen, grace.Seconds())
 	if err != nil {
-		return 0, fmt.Errorf("buscar checkouts vencidos: %w", err)
+		return nil, fmt.Errorf("buscar checkouts vencidos: %w", err)
 	}
-	var list []expired
+	var list []sale.CheckoutIntent
 	for rows.Next() {
-		var e expired
-		if err := rows.Scan(&e.reference, &e.reservationIDs, &e.productReservationIDs); err != nil {
+		c, err := scanCheckout(rows)
+		if err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("escanear checkout vencido: %w", err)
+			return nil, fmt.Errorf("escanear checkout vencido: %w", err)
 		}
-		list = append(list, e)
+		list = append(list, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	for _, e := range list {
-		if err := releaseReservationsTx(ctx, tx, e.reservationIDs); err != nil {
-			return 0, err
+	for i, c := range list {
+		if err := releaseReservationsTx(ctx, tx, c.ReservationIDs, reservation.ReturnExpired); err != nil {
+			return nil, err
 		}
-		if err := releaseProductReservationsTx(ctx, tx, e.productReservationIDs); err != nil {
-			return 0, err
+		if err := releaseProductReservationsTx(ctx, tx, c.ProductReservationIDs, reservation.ReturnExpired); err != nil {
+			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE payment_checkouts SET status = $2 WHERE reference = $1
-		`, e.reference, sale.CheckoutExpired); err != nil {
-			return 0, fmt.Errorf("cerrar checkout vencido: %w", err)
+		`, c.Reference, sale.CheckoutExpired); err != nil {
+			return nil, fmt.Errorf("cerrar checkout vencido: %w", err)
 		}
+		list[i].Status = sale.CheckoutExpired
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return int64(len(list)), nil
+	return list, nil
 }
 
 // RecordPaymentEvent guarda una notificación de la pasarela. Devuelve true si
@@ -654,13 +684,14 @@ func (r *SaleRepository) FlagSaleForReview(ctx context.Context, reference string
 const unsettledWindow = "2 hours"
 
 // ListUnsettledCheckouts devuelve las referencias que pueden haberse cobrado sin
-// que el backend lo sepa: abiertos ya vencidos (esperando el margen de gracia) y
+// que el backend lo sepa: abiertos ya vencidos (esperando el margen de gracia),
+// abiertos con el pago en proceso (PSE: se consultan hasta que se resuelvan) y
 // cerrados por vencimiento o rechazo recientemente.
 func (r *SaleRepository) ListUnsettledCheckouts(ctx context.Context, limit int) ([]string, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT reference
 		FROM payment_checkouts
-		WHERE (status = $1 AND expires_at <= now())
+		WHERE (status = $1 AND (expires_at <= now() OR payment_pending_at IS NOT NULL))
 		   OR (status IN ($2, $3) AND expires_at > now() - interval '`+unsettledWindow+`')
 		ORDER BY expires_at DESC
 		LIMIT $4
@@ -692,11 +723,11 @@ const reserveToLogSQL = `
 	INSERT INTO cart_reservation_logs
 		(reservation_id, user_id, customer_name, customer_email,
 		 card_id, card_name, variant_name, language, quantity,
-		 price_usd, price_cop, status)
+		 price_usd, price_cop, status, return_reason)
 	SELECT u.id, u.user_id,
 	       TRIM(COALESCE(usr.first_name,'') || ' ' || COALESCE(usr.last_name,'')), COALESCE(usr.email,''),
 	       c.id, c.name, cv.variant_name, il.language, u.quantity,
-	       il.price_usd, il.price_cop, $3
+	       il.price_usd, il.price_cop, $3, NULLIF($4, '')
 	FROM updated u
 	JOIN inventory_listings il ON il.id = u.listing_id
 	JOIN card_variants cv ON cv.id = il.variant_id
@@ -717,26 +748,27 @@ func confirmReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64) (bool, e
 	`, ids).Scan(&active); err != nil {
 		return false, fmt.Errorf("contar reservas activas: %w", err)
 	}
-	if _, err := tx.Exec(ctx, reserveToLogSQL, ids, "confirmed", "sold"); err != nil {
+	if _, err := tx.Exec(ctx, reserveToLogSQL, ids, "confirmed", "sold", ""); err != nil {
 		return false, fmt.Errorf("confirmar reservas del pago: %w", err)
 	}
 	return active < len(ids), nil
 }
 
 // releaseReservationsTx libera las reservas (el stock vuelve al inventario) y
-// registra el historial 'returned'. Es idempotente: solo toca las 'active'.
-func releaseReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64) error {
+// registra el historial 'returned' con su motivo. Es idempotente: solo toca las
+// 'active'.
+func releaseReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64, reason string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, reserveToLogSQL, ids, "released", "returned"); err != nil {
+	if _, err := tx.Exec(ctx, reserveToLogSQL, ids, "released", "returned", reason); err != nil {
 		return fmt.Errorf("liberar reservas: %w", err)
 	}
 	return nil
 }
 
 func (r *SaleRepository) ListByUser(ctx context.Context, userID string, limit, offset int) ([]sale.Sale, error) {
-	rows, err := r.db.Query(ctx, saleSelect+` WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, userID, limit, offset)
+	rows, err := r.db.Query(ctx, saleSelect+` WHERE s.user_id = $1 ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listar ventas del usuario: %w", err)
 	}
@@ -754,32 +786,6 @@ func (r *SaleRepository) ListByUser(ctx context.Context, userID string, limit, o
 		return nil, err
 	}
 	// Carga items de cada venta.
-	for i := range out {
-		if err := r.loadItems(ctx, &out[i]); err != nil {
-			return nil, fmt.Errorf("cargar items de venta %d: %w", out[i].ID, err)
-		}
-	}
-	return out, nil
-}
-
-func (r *SaleRepository) ListAll(ctx context.Context, limit, offset int) ([]sale.Sale, error) {
-	rows, err := r.db.Query(ctx, saleSelect+` ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("listar ventas: %w", err)
-	}
-	defer rows.Close()
-
-	var out []sale.Sale
-	for rows.Next() {
-		s, err := scanSale(rows)
-		if err != nil {
-			return nil, fmt.Errorf("escanear venta: %w", err)
-		}
-		out = append(out, s)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 	for i := range out {
 		if err := r.loadItems(ctx, &out[i]); err != nil {
 			return nil, fmt.Errorf("cargar items de venta %d: %w", out[i].ID, err)
@@ -908,7 +914,7 @@ func (r *SaleRepository) MarkPickupPaid(ctx context.Context, id int64) (sale.Sal
 	if err := lockPendingPickupTx(ctx, tx, id); err != nil {
 		return sale.Sale{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE sales SET status = $2, paid_at = now() WHERE id = $1`, id, sale.StatusPaid); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE sales SET status = $2, paid_at = now(), delivered_at = now() WHERE id = $1`, id, sale.StatusPaid); err != nil {
 		return sale.Sale{}, fmt.Errorf("marcar pedido %d como pagado: %w", id, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -979,4 +985,235 @@ func (r *SaleRepository) ExpirePickups(ctx context.Context, now time.Time) ([]sa
 		cancelled = append(cancelled, s)
 	}
 	return cancelled, firstErr
+}
+
+// ---------------------------------------------------------------------------
+// Pagos en proceso, cancelación solicitada, recordatorios y despacho.
+// ---------------------------------------------------------------------------
+
+// MarkCheckoutPending registra que el pago del checkout quedó en proceso en la
+// pasarela y alarga su retención hasta `window` desde que se creó el checkout
+// (sus reservas, `grace` más). Solo actúa la primera vez, con el checkout
+// abierto y dentro de la ventana; devuelve true en ese caso (hay que avisar al
+// cliente).
+func (r *SaleRepository) MarkCheckoutPending(ctx context.Context, reference string, window, grace time.Duration) (sale.CheckoutIntent, bool, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return sale.CheckoutIntent{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	c, err := scanCheckout(tx.QueryRow(ctx, checkoutSelect+` WHERE reference = $1 FOR UPDATE`, reference))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sale.CheckoutIntent{}, false, sale.ErrPaymentNotFound
+		}
+		return sale.CheckoutIntent{}, false, fmt.Errorf("buscar checkout en proceso: %w", err)
+	}
+	if c.Status != sale.CheckoutOpen || !c.PaymentPendingAt.IsZero() {
+		return c, false, tx.Commit(ctx)
+	}
+
+	var stockUntil time.Time
+	err = tx.QueryRow(ctx, `
+		UPDATE payment_checkouts
+		SET payment_pending_at = now(),
+		    expires_at = GREATEST(expires_at, created_at + make_interval(secs => $2))
+		WHERE reference = $1 AND created_at + make_interval(secs => $2) > now()
+		RETURNING payment_pending_at, expires_at, expires_at + make_interval(secs => $3)
+	`, reference, window.Seconds(), grace.Seconds()).Scan(&c.PaymentPendingAt, &c.ExpiresAt, &stockUntil)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// La ventana ya pasó: el pago se resuelve como tardío si llega a entrar.
+		return c, false, tx.Commit(ctx)
+	}
+	if err != nil {
+		return sale.CheckoutIntent{}, false, fmt.Errorf("marcar pago en proceso: %w", err)
+	}
+	if len(c.ReservationIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE cart_reservations SET expires_at = GREATEST(expires_at, $2)
+			WHERE id = ANY($1) AND status = 'active'
+		`, c.ReservationIDs, stockUntil); err != nil {
+			return sale.CheckoutIntent{}, false, fmt.Errorf("retener reservas del pago en proceso: %w", err)
+		}
+	}
+	if len(c.ProductReservationIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE product_reservations SET expires_at = GREATEST(expires_at, $2)
+			WHERE id = ANY($1) AND status = 'active'
+		`, c.ProductReservationIDs, stockUntil); err != nil {
+			return sale.CheckoutIntent{}, false, fmt.Errorf("retener productos del pago en proceso: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sale.CheckoutIntent{}, false, err
+	}
+	return c, true, nil
+}
+
+// RequestPickupCancel deja constancia de que el cliente pidió cancelar su pedido
+// de recogida. No toca el stock: el pedido sigue apartado hasta que el staff
+// decida.
+func (r *SaleRepository) RequestPickupCancel(ctx context.Context, id int64, userID string) (sale.Sale, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var (
+		owner       string
+		status      string
+		requestedAt *time.Time
+	)
+	err = tx.QueryRow(ctx, `SELECT user_id::text, status, cancel_requested_at FROM sales WHERE id = $1 FOR UPDATE`, id).
+		Scan(&owner, &status, &requestedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if err != nil {
+		return sale.Sale{}, fmt.Errorf("bloquear pedido %d: %w", id, err)
+	}
+	switch {
+	case owner != userID:
+		return sale.Sale{}, sale.ErrForbidden
+	case status != sale.StatusPendingPickup:
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	case requestedAt != nil:
+		return sale.Sale{}, sale.ErrCancelAlreadyRequested
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sales SET cancel_requested_at = now() WHERE id = $1`, id); err != nil {
+		return sale.Sale{}, fmt.Errorf("solicitar cancelación del pedido %d: %w", id, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sale.Sale{}, err
+	}
+	return r.FindByID(ctx, id)
+}
+
+// RejectPickupCancel descarta la solicitud de cancelación: el pedido sigue
+// apartado con su plazo original.
+func (r *SaleRepository) RejectPickupCancel(ctx context.Context, id int64) (sale.Sale, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockPendingPickupTx(ctx, tx, id); err != nil {
+		return sale.Sale{}, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE sales SET cancel_requested_at = NULL WHERE id = $1 AND cancel_requested_at IS NOT NULL`, id)
+	if err != nil {
+		return sale.Sale{}, fmt.Errorf("rechazar cancelación del pedido %d: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return sale.Sale{}, sale.ErrNoCancelRequest
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sale.Sale{}, err
+	}
+	return r.FindByID(ctx, id)
+}
+
+// reminderLead es cuánto antes del plazo se recuerda la recogida: el plazo
+// vence a las 23:59:59, así que 39 horas antes son las 9 de la mañana del día
+// anterior.
+const reminderLead = "39 hours"
+
+// ClaimPickupReminders marca y devuelve los pedidos de recogida a los que toca
+// recordarles que el plazo vence mañana. Marcar y devolver en la misma sentencia
+// garantiza que cada recordatorio salga una sola vez aunque el bucle se solape.
+// Se omiten los que tienen una cancelación solicitada.
+func (r *SaleRepository) ClaimPickupReminders(ctx context.Context, now time.Time) ([]sale.Sale, error) {
+	rows, err := r.db.Query(ctx, `
+		UPDATE sales SET pickup_reminder_sent_at = now()
+		WHERE status = $1
+		  AND pickup_reminder_sent_at IS NULL
+		  AND cancel_requested_at IS NULL
+		  AND pickup_deadline > $2
+		  AND pickup_deadline - interval '`+reminderLead+`' <= $2
+		RETURNING id
+	`, sale.StatusPendingPickup, now)
+	if err != nil {
+		return nil, fmt.Errorf("marcar recordatorios de recogida: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("escanear recordatorio de recogida: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]sale.Sale, 0, len(ids))
+	for _, id := range ids {
+		s, err := r.FindByID(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// MarkShipped registra el despacho de un pedido pagado con envío a domicilio.
+// Un pedido marcado para revisión no se despacha: primero hay que resolverlo.
+func (r *SaleRepository) MarkShipped(ctx context.Context, id int64, carrier, tracking string) (sale.Sale, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE sales SET shipped_at = now(), carrier = $2, tracking_number = $3
+		WHERE id = $1 AND status = $4 AND fulfillment = $5 AND NOT requires_review AND shipped_at IS NULL
+	`, id, carrier, tracking, sale.StatusPaid, sale.FulfillmentShipping)
+	if err != nil {
+		return sale.Sale{}, fmt.Errorf("marcar pedido %d como enviado: %w", id, err)
+	}
+	return r.afterDispatchUpdate(ctx, id, tag.RowsAffected())
+}
+
+// MarkDelivered registra que el pedido enviado llegó al cliente.
+func (r *SaleRepository) MarkDelivered(ctx context.Context, id int64) (sale.Sale, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE sales SET delivered_at = now()
+		WHERE id = $1 AND status = $2 AND fulfillment = $3 AND shipped_at IS NOT NULL AND delivered_at IS NULL
+	`, id, sale.StatusPaid, sale.FulfillmentShipping)
+	if err != nil {
+		return sale.Sale{}, fmt.Errorf("marcar pedido %d como entregado: %w", id, err)
+	}
+	return r.afterDispatchUpdate(ctx, id, tag.RowsAffected())
+}
+
+// afterDispatchUpdate devuelve el pedido actualizado o explica por qué no se
+// tocó: no existe (ErrPaymentNotFound) o no estaba en el estado correcto.
+func (r *SaleRepository) afterDispatchUpdate(ctx context.Context, id int64, affected int64) (sale.Sale, error) {
+	s, err := r.FindByID(ctx, id)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	if affected == 0 {
+		return sale.Sale{}, sale.ErrNotShippable
+	}
+	return s, nil
+}
+
+// ConfirmReview quita la marca de revisión de un pedido: el staff comprobó que
+// el pago y el inventario están bien.
+func (r *SaleRepository) ConfirmReview(ctx context.Context, id int64) (sale.Sale, error) {
+	tag, err := r.db.Exec(ctx, `UPDATE sales SET requires_review = false WHERE id = $1 AND requires_review`, id)
+	if err != nil {
+		return sale.Sale{}, fmt.Errorf("confirmar revisión del pedido %d: %w", id, err)
+	}
+	s, err := r.FindByID(ctx, id)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return sale.Sale{}, sale.ErrNotInReview
+	}
+	return s, nil
 }

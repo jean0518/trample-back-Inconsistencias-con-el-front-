@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	appReservation "trample-back/internal/application/reservation"
 	"trample-back/internal/domain/reservation"
+	"trample-back/internal/domain/sale"
 )
 
 type CartHandler struct {
@@ -236,25 +238,48 @@ func (h *CartHandler) RemoveFromCart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListReservationLogs devuelve el historial de reservas del carrito. Solo
-// admin. Filtro opcional por estado: reserved | returned | sold.
+// ListReservationLogs devuelve el historial de reservas de cartas y de
+// productos sellados. Hay una fila por evento (no por reserva): ver
+// reservation.ReservationLog. El total sin paginar va en X-Total-Count.
 //
 //	@Summary      Historial de reservas
 //	@Tags         admin
 //	@Produce      json
 //	@Security     BearerAuth
-//	@Param        status   query  string  false  "Filtrar por estado (reserved|returned|sold)"
-//	@Param        limit    query  int     false  "Límite (default 100)"
-//	@Param        offset   query  int     false  "Offset (default 0)"
-//	@Success      200  {array}  reservationLogResponse
+//	@Param        from    query  string  false  "Desde (YYYY-MM-DD, hora Colombia)"
+//	@Param        to      query  string  false  "Hasta, inclusive (YYYY-MM-DD)"
+//	@Param        status  query  string  false  "reserved | returned | sold"
+//	@Param        kind    query  string  false  "card | product"
+//	@Param        q       query  string  false  "Cliente (nombre o correo), carta o producto"
+//	@Param        limit   query  int     false  "Límite (default 100, máx. 500)"
+//	@Param        offset  query  int     false  "Offset (default 0)"
+//	@Success      200  {array}   reservationLogResponse
+//	@Header       200  {integer} X-Total-Count  "Total de resultados"
+//	@Failure      400  {object}  object{error=string}
 //	@Failure      401  {object}  object{error=string}
 //	@Failure      500  {object}  object{error=string}
 //	@Router       /admin/reservation-logs [get]
 func (h *CartHandler) ListReservationLogs(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	q := r.URL.Query()
+	from, to, err := sale.ParseDateRange(q.Get("from"), q.Get("to"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "fechas inválidas: usa YYYY-MM-DD y que 'to' no sea anterior a 'from'")
+		return
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	logs, err := h.cart.ListLogs(r.Context(), r.URL.Query().Get("status"), limit, offset)
+	logs, total, err := h.cart.ListLogs(r.Context(), reservation.LogFilter{
+		From: from, To: to,
+		Status: q.Get("status"),
+		Kind:   q.Get("kind"),
+		Query:  q.Get("q"),
+		Limit:  limit, Offset: offset,
+	})
+	if errors.Is(err, reservation.ErrInvalidLogFilter) {
+		Error(w, http.StatusBadRequest, "status admite reserved|returned|sold y kind admite card|product")
+		return
+	}
 	if err != nil {
 		internalError(w, err)
 		return
@@ -262,8 +287,9 @@ func (h *CartHandler) ListReservationLogs(w http.ResponseWriter, r *http.Request
 
 	resp := make([]reservationLogResponse, 0, len(logs))
 	for _, l := range logs {
-		resp = append(resp, reservationLogResponse{
+		item := reservationLogResponse{
 			ID:            l.ID,
+			Kind:          l.Kind,
 			ReservationID: l.ReservationID,
 			UserID:        l.UserID,
 			CustomerName:  l.CustomerName,
@@ -276,14 +302,29 @@ func (h *CartHandler) ListReservationLogs(w http.ResponseWriter, r *http.Request
 			PriceUSD:      l.PriceUSD,
 			PriceCOP:      l.PriceCOP,
 			Status:        l.Status,
-			CreatedAt:     l.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		})
+			ReturnReason:  l.ReturnReason,
+			CreatedAt:     l.CreatedAt.UTC().Format(time.RFC3339),
+			InCheckout:    l.InCheckout,
+		}
+		if l.Kind == reservation.KindProduct {
+			id := l.ProductID
+			item.ProductID = &id
+			item.Title = l.Title
+		}
+		if !l.ExpiresAt.IsZero() {
+			item.ExpiresAt = l.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+		resp = append(resp, item)
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	JSON(w, http.StatusOK, resp)
 }
 
 type reservationLogResponse struct {
-	ID            int64   `json:"id"`
+	ID int64 `json:"id"`
+	// Kind es card o product. Una reserva se identifica por (kind, reservation_id):
+	// los ids de reservas de cartas y de productos son independientes.
+	Kind          string  `json:"kind"`
 	ReservationID int64   `json:"reservation_id"`
 	UserID        string  `json:"user_id"`
 	CustomerName  string  `json:"customer_name"`
@@ -292,9 +333,17 @@ type reservationLogResponse struct {
 	CardName      string  `json:"card_name"`
 	VariantName   string  `json:"variant_name"`
 	Language      string  `json:"language"`
+	ProductID     *int64  `json:"product_id,omitempty"`
+	Title         string  `json:"title,omitempty"`
 	Quantity      int     `json:"quantity"`
 	PriceUSD      float64 `json:"price_usd"`
 	PriceCOP      float64 `json:"price_cop"`
 	Status        string  `json:"status"`
-	CreatedAt     string  `json:"created_at"`
+	// ReturnReason explica un returned: removed | expired | payment_failed.
+	ReturnReason string `json:"return_reason,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	// ExpiresAt es cuándo vence la reserva si sigue activa (RFC3339).
+	ExpiresAt string `json:"expires_at,omitempty"`
+	// InCheckout indica que la reserva la retiene un pago en línea abierto.
+	InCheckout bool `json:"in_checkout"`
 }

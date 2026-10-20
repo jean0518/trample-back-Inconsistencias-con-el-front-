@@ -287,7 +287,7 @@ func TestProcessPaymentEvent_SinReferencia(t *testing.T) {
 
 func TestExpireCheckouts(t *testing.T) {
 	_, sales, _, _ := abrirCheckout(t, sale.PaymentBold)
-	sales.expired = 3
+	sales.expired = make([]sale.CheckoutIntent, 3)
 
 	n, err := NewExpireCheckoutsUseCase(sales).Execute(context.Background())
 	if err != nil {

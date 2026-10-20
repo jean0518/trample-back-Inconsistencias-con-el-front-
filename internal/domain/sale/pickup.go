@@ -22,3 +22,29 @@ func PickupDeadlineFrom(from time.Time) time.Time {
 	}
 	return day.Add(24*time.Hour - time.Second)
 }
+
+// ParseDateRange convierte las fechas YYYY-MM-DD de un filtro (hora de
+// Colombia) en el intervalo [from, to) que cubre ambos días completos. Las
+// fechas vacías no limitan (devuelven cero). Error si alguna no es válida o si
+// `to` es anterior a `from`.
+func ParseDateRange(from, to string) (time.Time, time.Time, error) {
+	var start, end time.Time
+	if from != "" {
+		d, err := time.ParseInLocation("2006-01-02", from, storeZone)
+		if err != nil {
+			return time.Time{}, time.Time{}, ErrInvalidInput
+		}
+		start = d
+	}
+	if to != "" {
+		d, err := time.ParseInLocation("2006-01-02", to, storeZone)
+		if err != nil {
+			return time.Time{}, time.Time{}, ErrInvalidInput
+		}
+		end = d.AddDate(0, 0, 1) // el día `to` cuenta completo
+	}
+	if !start.IsZero() && !end.IsZero() && !end.After(start) {
+		return time.Time{}, time.Time{}, ErrInvalidInput
+	}
+	return start, end, nil
+}

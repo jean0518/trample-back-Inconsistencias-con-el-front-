@@ -78,8 +78,8 @@ func (f *fakeReservations) ReleaseExpired(context.Context) (int64, error) {
 func (f *fakeReservations) FindListingForReserve(context.Context, int64, string, string) (reservation.ListingInfo, error) {
 	return reservation.ListingInfo{}, errors.New("no implementado en el fake")
 }
-func (f *fakeReservations) ListReservationLogs(context.Context, string, int, int) ([]reservation.ReservationLog, error) {
-	return nil, errors.New("no implementado en el fake")
+func (f *fakeReservations) ListReservationLogs(context.Context, reservation.LogFilter) ([]reservation.ReservationLog, int, error) {
+	return nil, 0, errors.New("no implementado en el fake")
 }
 
 // fakeSales lleva la cuenta de qué se persistió. Las ventas creadas quedan en
@@ -97,12 +97,14 @@ type fakeSales struct {
 	closeCalls  int
 	approveRefs []string
 	rejectRefs  []string
-	expired     int64
-	expireGrace time.Duration
-	flagged     []string
-	forgotten   []string
-	restocked   []int64 // pedidos cancelados cuyo stock volvió al inventario
-	paidAmounts []int64
+	expired     []sale.CheckoutIntent
+	// pendingCalls cuenta las veces que se registró un pago en proceso.
+	pendingCalls int
+	expireGrace  time.Duration
+	flagged      []string
+	forgotten    []string
+	restocked    []int64 // pedidos cancelados cuyo stock volvió al inventario
+	paidAmounts  []int64
 	// confirmedIDs y confirmErr modelan la confirmación de reservas que Create
 	// hace en la misma transacción que la venta.
 	confirmedIDs [][]int64
@@ -111,6 +113,10 @@ type fakeSales struct {
 	// crear el checkout, el repositorio devuelve ErrCheckoutConflict y queda
 	// abierto el del ganador.
 	raceWinner *sale.CheckoutIntent
+	// reminded son los pedidos a los que ya se les recordó la recogida.
+	reminded map[int64]bool
+	// lastFilter es el último filtro recibido por Search o CountByStage.
+	lastFilter sale.ListFilter
 }
 
 func newFakeSales() *fakeSales {
@@ -224,6 +230,8 @@ func (f *fakeSales) ApprovePayment(_ context.Context, reference, paymentID strin
 	f.sales[s.ID] = s
 	c.Status = sale.CheckoutPaid
 	c.SaleID = s.ID
+	// Como el repositorio: solo la llamada que crea el pedido lo marca.
+	s.JustCreated = true
 	c.BoldPaymentID = paymentID
 	f.checkouts[reference] = c
 	return s, nil
@@ -246,17 +254,125 @@ func (f *fakeSales) RejectPayment(_ context.Context, reference string) (sale.Che
 	return c, nil
 }
 
-func (f *fakeSales) ExpireCheckouts(_ context.Context, grace time.Duration) (int64, error) {
+func (f *fakeSales) ExpireCheckouts(_ context.Context, grace time.Duration) ([]sale.CheckoutIntent, error) {
 	f.expireGrace = grace
 	return f.expired, nil
 }
 
-// ListUnsettledCheckouts imita al repositorio: abiertos ya vencidos y cerrados
-// por vencimiento o rechazo.
+// MarkCheckoutPending imita al repositorio: solo la primera vez, con el
+// checkout abierto, alarga la ventana a `window` desde ahora.
+func (f *fakeSales) MarkCheckoutPending(_ context.Context, reference string, window, _ time.Duration) (sale.CheckoutIntent, bool, error) {
+	f.pendingCalls++
+	c, ok := f.checkouts[reference]
+	if !ok {
+		return sale.CheckoutIntent{}, false, sale.ErrPaymentNotFound
+	}
+	if c.Status != sale.CheckoutOpen || !c.PaymentPendingAt.IsZero() {
+		return c, false, nil
+	}
+	c.PaymentPendingAt = time.Now()
+	if until := time.Now().Add(window); until.After(c.ExpiresAt) {
+		c.ExpiresAt = until
+	}
+	f.checkouts[reference] = c
+	return c, true, nil
+}
+
+func (f *fakeSales) RequestPickupCancel(_ context.Context, id int64, userID string) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	switch {
+	case !ok:
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	case s.UserID != userID:
+		return sale.Sale{}, sale.ErrForbidden
+	case s.Status != sale.StatusPendingPickup:
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	case !s.CancelRequestedAt.IsZero():
+		return sale.Sale{}, sale.ErrCancelAlreadyRequested
+	}
+	s.CancelRequestedAt = time.Now()
+	f.sales[id] = s
+	return s, nil
+}
+
+func (f *fakeSales) RejectPickupCancel(_ context.Context, id int64) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	switch {
+	case !ok:
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	case s.Status != sale.StatusPendingPickup:
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	case s.CancelRequestedAt.IsZero():
+		return sale.Sale{}, sale.ErrNoCancelRequest
+	}
+	s.CancelRequestedAt = time.Time{}
+	f.sales[id] = s
+	return s, nil
+}
+
+// ClaimPickupReminders devuelve una sola vez los pedidos pendientes cuyo plazo
+// vence en menos de 39 horas.
+func (f *fakeSales) ClaimPickupReminders(_ context.Context, now time.Time) ([]sale.Sale, error) {
+	if f.reminded == nil {
+		f.reminded = map[int64]bool{}
+	}
+	var out []sale.Sale
+	for id, s := range f.sales {
+		due := s.Status == sale.StatusPendingPickup && s.CancelRequestedAt.IsZero() &&
+			s.PickupDeadline.After(now) && !s.PickupDeadline.Add(-39*time.Hour).After(now)
+		if due && !f.reminded[id] {
+			f.reminded[id] = true
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeSales) MarkShipped(_ context.Context, id int64, carrier, tracking string) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if s.Status != sale.StatusPaid || s.Fulfillment != sale.FulfillmentShipping || s.RequiresReview || !s.ShippedAt.IsZero() {
+		return sale.Sale{}, sale.ErrNotShippable
+	}
+	s.ShippedAt, s.Carrier, s.TrackingNumber = time.Now(), carrier, tracking
+	f.sales[id] = s
+	return s, nil
+}
+
+func (f *fakeSales) MarkDelivered(_ context.Context, id int64) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if s.ShippedAt.IsZero() || !s.DeliveredAt.IsZero() {
+		return sale.Sale{}, sale.ErrNotShippable
+	}
+	s.DeliveredAt = time.Now()
+	f.sales[id] = s
+	return s, nil
+}
+
+func (f *fakeSales) ConfirmReview(_ context.Context, id int64) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if !s.RequiresReview {
+		return sale.Sale{}, sale.ErrNotInReview
+	}
+	s.RequiresReview = false
+	f.sales[id] = s
+	return s, nil
+}
+
+// ListUnsettledCheckouts imita al repositorio: abiertos ya vencidos o con el pago
+// en proceso, y cerrados por vencimiento o rechazo.
 func (f *fakeSales) ListUnsettledCheckouts(_ context.Context, limit int) ([]string, error) {
 	var refs []string
 	for ref, c := range f.checkouts {
-		openExpired := c.Status == sale.CheckoutOpen && !c.ExpiresAt.After(time.Now())
+		openExpired := c.Status == sale.CheckoutOpen && (!c.ExpiresAt.After(time.Now()) || !c.PaymentPendingAt.IsZero())
 		if openExpired || c.Status == sale.CheckoutExpired || c.Status == sale.CheckoutFailed {
 			refs = append(refs, ref)
 		}
@@ -337,9 +453,19 @@ func (f *fakeSales) ExpirePickups(_ context.Context, now time.Time) ([]sale.Sale
 func (f *fakeSales) ListByUser(context.Context, string, int, int) ([]sale.Sale, error) {
 	return nil, errors.New("no implementado en el fake")
 }
-func (f *fakeSales) ListAll(context.Context, int, int) ([]sale.Sale, error) {
-	return nil, errors.New("no implementado en el fake")
+
+// Search guarda el último filtro recibido para que los tests verifiquen cómo
+// lo normaliza el caso de uso.
+func (f *fakeSales) Search(_ context.Context, filter sale.ListFilter) ([]sale.Sale, int, error) {
+	f.lastFilter = filter
+	return nil, 0, nil
 }
+
+func (f *fakeSales) CountByStage(_ context.Context, filter sale.ListFilter) (sale.StageCounts, error) {
+	f.lastFilter = filter
+	return sale.StageCounts{}, nil
+}
+
 func (f *fakeSales) Stats(context.Context, string, time.Time) ([]sale.StatBucket, error) {
 	return nil, errors.New("no implementado en el fake")
 }

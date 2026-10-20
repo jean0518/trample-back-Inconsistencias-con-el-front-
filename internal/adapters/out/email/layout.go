@@ -14,6 +14,22 @@ type Brand struct {
 	ContactEmail string
 	Location     string
 	Social       string // @tramplestore
+	WhatsAppURL  string // https://wa.me/57300…; vacío si la tienda no tiene WhatsApp
+}
+
+// WhatsAppLink arma el enlace wa.me a partir del número (solo cuentan los
+// dígitos, con indicativo de país). Vacío si no hay número.
+func WhatsAppLink(number string) string {
+	var b strings.Builder
+	for _, r := range number {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "https://wa.me/" + b.String()
 }
 
 // Paleta del sitio (globals.css, tema oscuro) en hex: los clientes de correo no
@@ -55,6 +71,16 @@ const itemsTable = `<table role="presentation" width="100%" cellpadding="0" cell
 {{end}}{{if .Shipping}}<tr><td style="` + sTd + `">Envío a domicilio</td><td align="right" style="` + sTd + `;white-space:nowrap">{{.Shipping}}</td></tr>
 {{end}}<tr><td style="padding:14px 0 0;font-family:` + font + `;font-size:15px;font-weight:700;color:` + cText + `">{{.TotalLabel}}</td><td align="right" style="padding:14px 0 0;font-family:` + font + `;font-size:20px;font-weight:700;color:` + cPrimary + `;white-space:nowrap">{{.Total}}</td></tr>
 </table>`
+
+// helpHTML y helpText invitan a escribir por WhatsApp (o al correo de contacto si
+// la tienda no tiene WhatsApp). `question` es la frase que lo introduce.
+func helpHTML(question string) string {
+	return `<p style="` + sSmall + `;margin:0 0 16px">` + question + ` {{if .Brand.WhatsAppURL}}Escríbenos por <a href="{{.Brand.WhatsAppURL}}" style="color:` + cPrimary + `;text-decoration:none;font-weight:700">WhatsApp</a>.{{else if .Brand.ContactEmail}}Escríbenos a <a href="mailto:{{.Brand.ContactEmail}}" style="color:` + cPrimary + `;text-decoration:none">{{.Brand.ContactEmail}}</a>.{{end}}</p>`
+}
+
+func helpText(question string) string {
+	return question + `{{if .Brand.WhatsAppURL}} Escríbenos por WhatsApp: {{.Brand.WhatsAppURL}}{{else if .Brand.ContactEmail}} Escríbenos a {{.Brand.ContactEmail}}{{end}}`
+}
 
 // panel es un recuadro destacado; `accent` es el color de su franja izquierda.
 func panel(accent, inner string) string {

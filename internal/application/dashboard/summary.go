@@ -58,6 +58,10 @@ func (uc *SummaryUseCase) Execute(ctx context.Context, days, recent int) (dashbo
 	if err != nil {
 		return dashboard.Summary{}, err
 	}
+	products, err := uc.repo.SealedProducts(ctx)
+	if err != nil {
+		return dashboard.Summary{}, err
+	}
 
 	return dashboard.Summary{
 		ActiveListings: kpis.ActiveListings,
@@ -69,7 +73,35 @@ func (uc *SummaryUseCase) Execute(ctx context.Context, days, recent int) (dashbo
 		SeriesDays:     days,
 		Series:         fillSeries(series, since, days),
 		RecentOrders:   recentOrders,
+		Sealed:         summarizeSealed(products),
 	}, nil
+}
+
+// summarizeSealed suma el inventario de sellado. Disponible = stock menos lo
+// reservado (nunca negativo); el valor y las alertas solo cuentan los activos,
+// que son los que ve la tienda.
+func summarizeSealed(products []dashboard.SealedProduct) dashboard.SealedInventory {
+	inv := dashboard.SealedInventory{SoldOut: []dashboard.Item{}, LowStock: []dashboard.Low{}}
+	for _, p := range products {
+		available := max(p.Stock-p.Reserved, 0)
+		inv.Products++
+		inv.StockUnits += p.Stock
+		inv.ReservedUnits += p.Reserved
+		inv.AvailableUnits += available
+		if !p.Active {
+			inv.Hidden++
+			continue
+		}
+		inv.Active++
+		inv.StockValueCOP += int64(available) * p.PriceCOP
+		switch {
+		case available == 0:
+			inv.SoldOut = append(inv.SoldOut, dashboard.Item{ID: p.ID, Title: p.Title})
+		case available <= dashboard.LowStockMax:
+			inv.LowStock = append(inv.LowStock, dashboard.Low{ID: p.ID, Title: p.Title, Available: available})
+		}
+	}
+	return inv
 }
 
 // fillSeries convierte los días con pedidos en una serie continua: PostgreSQL

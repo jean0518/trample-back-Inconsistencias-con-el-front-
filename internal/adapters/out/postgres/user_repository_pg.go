@@ -90,3 +90,30 @@ func (r *UserRepository) MarkEmailVerified(ctx context.Context, id string) error
 		id)
 	return err
 }
+
+// ListAdminEmails devuelve los correos de los usuarios con rol admin. El rol del
+// staff vive en admin_users; el de users solo cuenta si no tiene registro ahí
+// (mismo criterio que userSelect).
+func (r *UserRepository) ListAdminEmails(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT u.email
+		FROM users u
+		LEFT JOIN admin_users au ON au.user_id = u.id
+		WHERE (CASE WHEN au.id IS NOT NULL THEN au.role ELSE u.role END) = $1
+		  AND u.email <> ''
+		ORDER BY u.email
+	`, auth.RoleAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var emails []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		emails = append(emails, e)
+	}
+	return emails, rows.Err()
+}

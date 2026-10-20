@@ -55,10 +55,15 @@ type SaleRepository interface {
 	// pasada la ventana de retención más `grace`, y libera sus reservas. El
 	// margen deja terminar los pagos que ya estaban en curso al vencer (p. ej.
 	// PSE). Devuelve cuántos cerró.
-	ExpireCheckouts(ctx context.Context, grace time.Duration) (int64, error)
+	ExpireCheckouts(ctx context.Context, grace time.Duration) ([]sale.CheckoutIntent, error)
+	// MarkCheckoutPending registra que el pago quedó en proceso en la pasarela y
+	// alarga la retención del checkout hasta `window` desde su creación (el
+	// stock, `grace` más). Solo actúa la primera vez, con el checkout abierto y
+	// dentro de la ventana; devuelve true en ese caso.
+	MarkCheckoutPending(ctx context.Context, reference string, window, grace time.Duration) (sale.CheckoutIntent, bool, error)
 	// ListUnsettledCheckouts devuelve las referencias de los pagos que todavía
-	// pueden haberse cobrado sin que lo sepamos: abiertos ya vencidos, y cerrados
-	// por vencimiento o rechazo en las últimas horas. Es la entrada de la
+	// pueden haberse cobrado sin que lo sepamos: abiertos ya vencidos o con el
+	// pago en proceso, y cerrados por vencimiento o rechazo en las últimas horas. Es la entrada de la
 	// reconciliación con la pasarela.
 	ListUnsettledCheckouts(ctx context.Context, limit int) ([]string, error)
 
@@ -84,12 +89,35 @@ type SaleRepository interface {
 	// ExpirePickups cancela los pedidos pendientes cuyo plazo venció en `now` y
 	// devuelve los que canceló. Cada uno se procesa por separado.
 	ExpirePickups(ctx context.Context, now time.Time) ([]sale.Sale, error)
+	// RequestPickupCancel registra que el cliente `userID` pidió cancelar su
+	// pedido de recogida (el stock sigue apartado). Errores: ErrForbidden si el
+	// pedido no es suyo, ErrNotPendingPickup y ErrCancelAlreadyRequested.
+	RequestPickupCancel(ctx context.Context, id int64, userID string) (sale.Sale, error)
+	// RejectPickupCancel descarta la solicitud de cancelación (ErrNoCancelRequest
+	// si no había una). La aprobación es CancelPickup.
+	RejectPickupCancel(ctx context.Context, id int64) (sale.Sale, error)
+	// ClaimPickupReminders marca y devuelve los pedidos de recogida a los que
+	// toca recordarles el plazo. Cada pedido se devuelve una sola vez.
+	ClaimPickupReminders(ctx context.Context, now time.Time) ([]sale.Sale, error)
+
+	// MarkShipped registra el despacho de un pedido pagado con envío
+	// (ErrNotShippable si no aplica, p. ej. requiere revisión).
+	MarkShipped(ctx context.Context, id int64, carrier, tracking string) (sale.Sale, error)
+	// MarkDelivered registra la entrega de un pedido ya enviado.
+	MarkDelivered(ctx context.Context, id int64) (sale.Sale, error)
+	// ConfirmReview quita la marca de revisión (ErrNotInReview si no la tenía).
+	ConfirmReview(ctx context.Context, id int64) (sale.Sale, error)
 
 	// FindByID devuelve una venta con sus items. Se usa para leer el pedido que
 	// dejó ApprovePayment, cuya referencia ya solo vive en el checkout.
 	FindByID(ctx context.Context, id int64) (sale.Sale, error)
 	ListByUser(ctx context.Context, userID string, limit, offset int) ([]sale.Sale, error)
-	ListAll(ctx context.Context, limit, offset int) ([]sale.Sale, error)
+	// Search lista las ventas con los filtros del panel y devuelve el total de
+	// resultados sin paginar.
+	Search(ctx context.Context, f sale.ListFilter) ([]sale.Sale, int, error)
+	// CountByStage cuenta pedidos e importe por etapa (pendiente, por enviar,
+	// enviado, cerrado, cancelado) con los filtros indicados.
+	CountByStage(ctx context.Context, f sale.ListFilter) (sale.StageCounts, error)
 	// Stats agrega las ventas en buckets desde `since` hasta ahora. period
 	// admite "day" (agrupa por día) o "week" (agrupa por semana ISO).
 	Stats(ctx context.Context, period string, since time.Time) ([]sale.StatBucket, error)

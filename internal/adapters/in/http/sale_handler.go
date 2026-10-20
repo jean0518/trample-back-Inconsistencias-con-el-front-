@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -22,6 +23,7 @@ type SaleHandler struct {
 	stats       *appSale.SaleStatsUseCase
 	checkStatus *appSale.CheckPaymentStatusUseCase
 	pickups     *appSale.PickupOrdersUseCase
+	fulfillment *appSale.FulfillmentUseCase
 }
 
 func NewSaleHandler(
@@ -31,8 +33,9 @@ func NewSaleHandler(
 	stats *appSale.SaleStatsUseCase,
 	checkStatus *appSale.CheckPaymentStatusUseCase,
 	pickups *appSale.PickupOrdersUseCase,
+	fulfillment *appSale.FulfillmentUseCase,
 ) *SaleHandler {
-	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus, pickups: pickups}
+	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus, pickups: pickups, fulfillment: fulfillment}
 }
 
 // canSeeAllSales indica si el usuario puede consultar el historial completo de
@@ -59,6 +62,11 @@ type saleItemResponse struct {
 	Quantity  int     `json:"quantity"`
 	PriceCOP  int64   `json:"price_cop"`
 	PriceUSD  float64 `json:"price_usd"`
+	// Snapshot al vender. Vacíos en líneas viejas cuya carta ya no existe.
+	VariantName   string `json:"variant_name"`
+	GameCode      string `json:"game_code"`
+	GameName      string `json:"game_name"`
+	ExpansionName string `json:"expansion_name"`
 }
 
 // productItemResponse es una línea de producto propio de la tienda en un pedido.
@@ -70,7 +78,10 @@ type productItemResponse struct {
 }
 
 type saleResponse struct {
-	ID            int64   `json:"id"`
+	ID int64 `json:"id"`
+	// Comprador (nombre + apellido y correo de su cuenta).
+	CustomerName  string  `json:"customer_name"`
+	CustomerEmail string  `json:"customer_email"`
 	TotalCOP      int64   `json:"total_cop"`
 	TotalUSD      float64 `json:"total_usd"`
 	ShippingCOP   int64   `json:"shipping_cop"`
@@ -89,8 +100,21 @@ type saleResponse struct {
 	RequiresReview   bool   `json:"requires_review"`
 	// PickupDeadline es el límite para pagar y recoger un pedido pendiente en
 	// tienda (RFC3339). Vacío en los demás pedidos.
-	PickupDeadline string             `json:"pickup_deadline,omitempty"`
-	Items          []saleItemResponse `json:"items"`
+	PickupDeadline string `json:"pickup_deadline,omitempty"`
+	// CancelRequestedAt aparece cuando el cliente pidió cancelar un pedido de
+	// recogida y el staff aún no decide (o ya lo canceló a pedido suyo).
+	CancelRequestedAt string `json:"cancel_requested_at,omitempty"`
+	// ShippingStatus es la etapa del despacho (pending | shipped | delivered).
+	// Solo viene en los pedidos pagados con envío a domicilio: el panel usa su
+	// presencia para mostrar las acciones de envío.
+	ShippingStatus string `json:"shipping_status,omitempty"`
+	// Despacho de los pedidos con envío (RFC3339; vacíos si no aplica).
+	ShippedAt      string `json:"shipped_at,omitempty"`
+	Carrier        string `json:"carrier,omitempty"`
+	TrackingNumber string `json:"tracking_number,omitempty"`
+	// DeliveredAt: entregado por la transportadora o recogido en la tienda.
+	DeliveredAt string             `json:"delivered_at,omitempty"`
+	Items       []saleItemResponse `json:"items"`
 	// ProductItems son las líneas de productos propios de la tienda (siempre
 	// presente; vacío si el pedido es solo de cartas).
 	ProductItems []productItemResponse `json:"product_items"`
@@ -143,6 +167,11 @@ func newSaleItemResponse(it sale.SaleItem) saleItemResponse {
 		Quantity:  it.Quantity,
 		PriceCOP:  it.PriceCOP,
 		PriceUSD:  it.PriceUSD,
+
+		VariantName:   it.VariantName,
+		GameCode:      it.GameCode,
+		GameName:      it.GameName,
+		ExpansionName: it.ExpansionName,
 	}
 }
 
@@ -159,6 +188,8 @@ func newSaleResponse(s sale.Sale) saleResponse {
 	}
 	return saleResponse{
 		ID:               s.ID,
+		CustomerName:     s.CustomerName,
+		CustomerEmail:    s.CustomerEmail,
 		TotalCOP:         s.TotalCOP,
 		TotalUSD:         s.TotalUSD,
 		ShippingCOP:      s.ShippingCOP,
@@ -175,8 +206,30 @@ func newSaleResponse(s sale.Sale) saleResponse {
 		PaidAt:           formatTime(s.PaidAt),
 		RequiresReview:   s.RequiresReview,
 		PickupDeadline:   formatTime(s.PickupDeadline),
-		Items:            items,
-		ProductItems:     productItems,
+
+		CancelRequestedAt: formatTime(s.CancelRequestedAt),
+		ShippingStatus:    shippingStatus(s),
+		ShippedAt:         formatTime(s.ShippedAt),
+		Carrier:           s.Carrier,
+		TrackingNumber:    s.TrackingNumber,
+		DeliveredAt:       formatTime(s.DeliveredAt),
+		Items:             items,
+		ProductItems:      productItems,
+	}
+}
+
+// shippingStatus deriva la etapa del despacho de un pedido pagado con envío.
+func shippingStatus(s sale.Sale) string {
+	if s.Fulfillment != sale.FulfillmentShipping || s.Status != sale.StatusPaid {
+		return ""
+	}
+	switch {
+	case !s.DeliveredAt.IsZero():
+		return "delivered"
+	case !s.ShippedAt.IsZero():
+		return "shipped"
+	default:
+		return "pending"
 	}
 }
 
@@ -330,12 +383,18 @@ func (h *SaleHandler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 // respondSaleError traduce los errores del dominio de ventas a respuestas HTTP.
 func respondSaleError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, sale.ErrEmailNotVerified):
+		// El código estable deja al frontend mostrar "verifica tu correo" con el
+		// botón de reenviar, sin depender del texto.
+		JSON(w, http.StatusForbidden, map[string]string{"error": err.Error(), "code": "email_not_verified"})
 	case errors.Is(err, sale.ErrEmptyCart):
 		Error(w, http.StatusBadRequest, "el carrito no tiene items para confirmar")
 	case errors.Is(err, sale.ErrInvalidInput):
 		Error(w, http.StatusBadRequest, "datos de la venta inválidos")
 	case errors.Is(err, sale.ErrReservationExpired), errors.Is(err, sale.ErrCheckoutConflict),
-		errors.Is(err, sale.ErrInsufficientStock), errors.Is(err, sale.ErrNotPendingPickup):
+		errors.Is(err, sale.ErrInsufficientStock), errors.Is(err, sale.ErrNotPendingPickup),
+		errors.Is(err, sale.ErrCancelAlreadyRequested), errors.Is(err, sale.ErrNoCancelRequest),
+		errors.Is(err, sale.ErrNotShippable), errors.Is(err, sale.ErrNotInReview):
 		Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, sale.ErrPaymentNotFound):
 		Error(w, http.StatusNotFound, err.Error())
@@ -448,16 +507,27 @@ func (h *SaleHandler) ListSales(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, resp)
 }
 
-// ListAdminSales devuelve el historial COMPLETO de ventas. Solo staff con
-// acceso a ventas o pedidos.
+// ListAdminSales devuelve el historial de ventas con filtros. Solo staff con
+// acceso a ventas o pedidos. Responde un arreglo (mismo contrato de siempre) y
+// el total sin paginar en el header X-Total-Count.
 //
-//	@Summary      Listado completo de ventas (staff)
+//	@Summary      Listado de ventas con filtros (staff)
 //	@Tags         admin
 //	@Produce      json
 //	@Security     BearerAuth
-//	@Param        limit   query  int  false  "Límite"  default(50)
-//	@Param        offset  query  int  false  "Offset"  default(0)
-//	@Success      200  {array}  saleResponse
+//	@Param        from             query  string  false  "Desde (YYYY-MM-DD, hora Colombia)"
+//	@Param        to               query  string  false  "Hasta, inclusive (YYYY-MM-DD)"
+//	@Param        status           query  string  false  "paid | pending_pickup | cancelled"
+//	@Param        shipping_status  query  string  false  "pending | shipped | delivered"
+//	@Param        fulfillment      query  string  false  "pickup | shipping"
+//	@Param        payment_method   query  string  false  "bold | efectivo | transferencia | tienda"
+//	@Param        q                query  string  false  "Busca en #id, cliente, teléfono, ciudad, carta o producto"
+//	@Param        sort             query  string  false  "-created_at (default) | created_at"
+//	@Param        limit            query  int     false  "Límite (default 50, máx. 500)"
+//	@Param        offset           query  int     false  "Offset"
+//	@Success      200  {array}   saleResponse
+//	@Header       200  {integer} X-Total-Count  "Total de resultados"
+//	@Failure      400  {object}  object{error=string}
 //	@Failure      401  {object}  object{error=string}
 //	@Failure      403  {object}  object{error=string}
 //	@Router       /admin/sales [get]
@@ -471,16 +541,14 @@ func (h *SaleHandler) ListAdminSales(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusForbidden, "no tienes acceso a ventas o pedidos")
 		return
 	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if limit <= 0 {
-		limit = 50
+	filter, ok := saleFilterFromQuery(w, r)
+	if !ok {
+		return
 	}
 
-	items, err := h.list.AllSales(r.Context(), limit, offset)
+	items, total, err := h.list.Search(r.Context(), filter)
 	if err != nil {
-		internalError(w, err)
+		respondSaleError(w, err)
 		return
 	}
 
@@ -488,7 +556,74 @@ func (h *SaleHandler) ListAdminSales(w http.ResponseWriter, r *http.Request) {
 	for _, s := range items {
 		resp = append(resp, newSaleResponse(s))
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	JSON(w, http.StatusOK, resp)
+}
+
+// SaleCounts cuenta los pedidos por etapa para las tarjetas del panel de
+// pedidos. Acepta los mismos filtros que /admin/sales salvo status.
+//
+//	@Summary      Conteo de pedidos por etapa (staff)
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        from  query  string  false  "Desde (YYYY-MM-DD)"
+//	@Param        to    query  string  false  "Hasta, inclusive (YYYY-MM-DD)"
+//	@Param        q     query  string  false  "Búsqueda"
+//	@Success      200  {object}  sale.StageCounts
+//	@Failure      400  {object}  object{error=string}
+//	@Failure      403  {object}  object{error=string}
+//	@Router       /admin/sales/counts [get]
+func (h *SaleHandler) SaleCounts(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !canSeeAllSales(user) {
+		Error(w, http.StatusForbidden, "no tienes acceso a ventas o pedidos")
+		return
+	}
+	filter, ok := saleFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
+	counts, err := h.list.Counts(r.Context(), filter)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, counts)
+}
+
+// saleFilterFromQuery lee los filtros del listado de ventas. Responde 400 si
+// una fecha u orden no es válido.
+func saleFilterFromQuery(w http.ResponseWriter, r *http.Request) (sale.ListFilter, bool) {
+	q := r.URL.Query()
+	from, to, err := sale.ParseDateRange(q.Get("from"), q.Get("to"))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "fechas inválidas: usa YYYY-MM-DD y que 'to' no sea anterior a 'from'")
+		return sale.ListFilter{}, false
+	}
+	sort := q.Get("sort")
+	if sort != "" && sort != "created_at" && sort != "-created_at" {
+		Error(w, http.StatusBadRequest, "sort admite created_at o -created_at")
+		return sale.ListFilter{}, false
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	return sale.ListFilter{
+		From:           from,
+		To:             to,
+		Status:         q.Get("status"),
+		ShippingStatus: q.Get("shipping_status"),
+		Fulfillment:    q.Get("fulfillment"),
+		PaymentMethod:  q.Get("payment_method"),
+		Query:          q.Get("q"),
+		Ascending:      sort == "created_at",
+		Limit:          limit,
+		Offset:         offset,
+	}, true
 }
 
 type statBucketResponse struct {
@@ -603,6 +738,132 @@ func (h *SaleHandler) CancelPickup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := h.pickups.Cancel(r.Context(), id)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
+// RequestPickupCancel deja que el cliente pida cancelar su pedido de recogida.
+// No lo cancela: el staff aprueba (POST /admin/sales/{id}/cancel) o rechaza
+// (POST /admin/sales/{id}/reject-cancel). Los pedidos pagados en línea no se
+// cancelan desde la página: se gestionan por WhatsApp.
+//
+//	@Summary      Solicitar la cancelación de un pedido de recogida
+//	@Tags         sales
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      403  {object}  object{error=string}
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /sales/{id}/cancel-request [post]
+func (h *SaleHandler) RequestPickupCancel(w http.ResponseWriter, r *http.Request) {
+	user, ok := AuthFromContext(r.Context())
+	if !ok {
+		Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	s, err := h.pickups.RequestCancel(r.Context(), id, user.ID)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
+// RejectPickupCancel rechaza la solicitud de cancelación: el pedido sigue
+// apartado y el cliente recibe un correo con el contacto de la tienda.
+//
+//	@Summary      Rechazar la cancelación solicitada por el cliente
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /admin/sales/{id}/reject-cancel [post]
+func (h *SaleHandler) RejectPickupCancel(w http.ResponseWriter, r *http.Request) {
+	h.adminSaleAction(w, r, h.pickups.RejectCancel)
+}
+
+// ConfirmReview marca como revisado un pedido que requería revisión (pago
+// tardío o con otro monto) y le envía al cliente la confirmación del pedido.
+//
+//	@Summary      Confirmar un pedido en revisión
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /admin/sales/{id}/confirm-review [post]
+func (h *SaleHandler) ConfirmReview(w http.ResponseWriter, r *http.Request) {
+	h.adminSaleAction(w, r, h.fulfillment.ConfirmReview)
+}
+
+type shipOrderRequest struct {
+	Carrier        string `json:"carrier"`         // obligatorio
+	TrackingNumber string `json:"tracking_number"` // opcional
+}
+
+// ShipOrder marca como enviado un pedido pagado con envío a domicilio. Un
+// pedido en revisión no se puede despachar (409).
+//
+//	@Summary      Marcar un pedido como enviado
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path      int               true  "ID del pedido"
+//	@Param        body  body      shipOrderRequest  true  "Transportadora y guía"
+//	@Success      200   {object}  saleResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Router       /admin/sales/{id}/ship [post]
+func (h *SaleHandler) ShipOrder(w http.ResponseWriter, r *http.Request) {
+	var body shipOrderRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	h.adminSaleAction(w, r, func(ctx context.Context, id int64) (sale.Sale, error) {
+		return h.fulfillment.MarkShipped(ctx, id, body.Carrier, body.TrackingNumber)
+	})
+}
+
+// DeliverOrder marca como entregado un pedido ya enviado.
+//
+//	@Summary      Marcar un pedido enviado como entregado
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del pedido"
+//	@Success      200  {object}  saleResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Failure      409  {object}  object{error=string}
+//	@Router       /admin/sales/{id}/deliver [post]
+func (h *SaleHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) {
+	h.adminSaleAction(w, r, h.fulfillment.MarkDelivered)
+}
+
+// adminSaleAction lee el id del pedido, aplica la acción y responde el pedido
+// actualizado.
+func (h *SaleHandler) adminSaleAction(w http.ResponseWriter, r *http.Request, action func(ctx context.Context, id int64) (sale.Sale, error)) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	s, err := action(r.Context(), id)
 	if err != nil {
 		respondSaleError(w, err)
 		return

@@ -129,3 +129,88 @@ func (r *DashboardRepository) RecentSales(ctx context.Context, limit int) ([]das
 	}
 	return out, rows.Err()
 }
+
+// BreakdownSales devuelve las ventas creadas en [from, to) y, para las pagadas,
+// sus líneas de cartas y de productos. Son dos consultas (encabezados y líneas)
+// en vez de una por venta.
+func (r *DashboardRepository) BreakdownSales(ctx context.Context, from, to time.Time) ([]dashboard.BreakdownSale, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, status, total_cop, shipping_cop, payment_method, fulfillment, created_at
+		FROM sales
+		WHERE created_at >= $1 AND created_at < $2
+		ORDER BY created_at, id
+	`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("consultar ventas del desglose: %w", err)
+	}
+	var (
+		sales []dashboard.BreakdownSale
+		index = map[int64]int{}
+	)
+	for rows.Next() {
+		var s dashboard.BreakdownSale
+		if err := rows.Scan(&s.ID, &s.Status, &s.TotalCOP, &s.ShippingCOP, &s.PaymentMethod, &s.Fulfillment, &s.CreatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("escanear venta del desglose: %w", err)
+		}
+		index[s.ID] = len(sales)
+		sales = append(sales, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	lines, err := r.db.Query(ctx, `
+		SELECT si.sale_id, false, si.card_id, NULL::bigint, si.card_name, si.language, si.quantity, si.price_cop
+		FROM sale_items si JOIN sales s ON s.id = si.sale_id
+		WHERE s.status = 'paid' AND s.created_at >= $1 AND s.created_at < $2
+		UNION ALL
+		SELECT sp.sale_id, true, 0, sp.product_id, sp.title, '', sp.quantity, sp.price_cop
+		FROM sale_product_items sp JOIN sales s ON s.id = sp.sale_id
+		WHERE s.status = 'paid' AND s.created_at >= $1 AND s.created_at < $2
+	`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("consultar líneas del desglose: %w", err)
+	}
+	defer lines.Close()
+	for lines.Next() {
+		var (
+			saleID int64
+			l      dashboard.BreakdownLine
+		)
+		if err := lines.Scan(&saleID, &l.Sealed, &l.CardID, &l.ProductID, &l.Name, &l.Language, &l.Quantity, &l.PriceCOP); err != nil {
+			return nil, fmt.Errorf("escanear línea del desglose: %w", err)
+		}
+		if i, ok := index[saleID]; ok {
+			sales[i].Lines = append(sales[i].Lines, l)
+		}
+	}
+	return sales, lines.Err()
+}
+
+// SealedProducts devuelve cada producto sellado con sus unidades reservadas
+// ahora (mismo criterio que el listado de productos).
+func (r *DashboardRepository) SealedProducts(ctx context.Context) ([]dashboard.SealedProduct, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT p.id, p.title, p.status = 'active', p.stock,
+		       COALESCE((SELECT sum(pr.quantity) FROM product_reservations pr
+		                 WHERE pr.product_id = p.id AND pr.status = 'active'), 0)::int,
+		       p.price_cop
+		FROM products p
+		ORDER BY p.title, p.id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("consultar inventario de sellado: %w", err)
+	}
+	defer rows.Close()
+	var out []dashboard.SealedProduct
+	for rows.Next() {
+		var p dashboard.SealedProduct
+		if err := rows.Scan(&p.ID, &p.Title, &p.Active, &p.Stock, &p.Reserved, &p.PriceCOP); err != nil {
+			return nil, fmt.Errorf("escanear producto sellado: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

@@ -54,6 +54,14 @@ type ConfirmSaleUseCase struct {
 	products     out.ProductReservationRepository
 	sales        out.SaleRepository
 	notifier     *PurchaseNotifier
+	users        userFinder
+}
+
+// WithEmailVerification exige que el cliente haya verificado su correo para
+// apartar un pedido (el staff queda exento).
+func (uc *ConfirmSaleUseCase) WithEmailVerification(users userFinder) *ConfirmSaleUseCase {
+	uc.users = users
+	return uc
 }
 
 // WithProducts activa la venta de productos propios en el mismo pedido que las
@@ -63,7 +71,8 @@ func (uc *ConfirmSaleUseCase) WithProducts(p out.ProductReservationRepository) *
 	return uc
 }
 
-// WithNotifier activa el correo de "pedido apartado" de la recogida en tienda.
+// WithNotifier activa el correo de "pedido apartado" de la recogida en tienda y
+// el aviso al staff de cada venta registrada.
 func (uc *ConfirmSaleUseCase) WithNotifier(n *PurchaseNotifier) *ConfirmSaleUseCase {
 	uc.notifier = n
 	return uc
@@ -110,6 +119,9 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 	if err := validateFulfillment(input); err != nil {
 		return ConfirmResult{}, err
 	}
+	if err := requireVerifiedEmail(ctx, uc.users, input); err != nil {
+		return ConfirmResult{}, err
+	}
 
 	cart, err := priceCart(ctx, uc.reservations, uc.products, input.UserID, ids, input.ProductReservationIDs, input.Fulfillment)
 	if err != nil {
@@ -153,8 +165,28 @@ func (uc *ConfirmSaleUseCase) Execute(ctx context.Context, input sale.ConfirmInp
 	}
 	if created.Status == sale.StatusPendingPickup {
 		uc.notifier.PickupReserved(created)
+	} else {
+		uc.notifier.AdminNewOrder(created)
 	}
 	return ConfirmResult{Sale: created}, nil
+}
+
+// requireVerifiedEmail rechaza la compra de un cliente con el correo sin
+// verificar: los avisos del pedido (confirmación, cancelación, envío) solo le
+// llegan a un correo válido. El staff registra ventas a nombre propio y queda
+// exento. Sin `users` (verificación desactivada) no se exige nada.
+func requireVerifiedEmail(ctx context.Context, users userFinder, input sale.ConfirmInput) error {
+	if users == nil || input.IsAdmin {
+		return nil
+	}
+	u, err := users.FindByID(ctx, input.UserID)
+	if err != nil {
+		return err
+	}
+	if !u.EmailVerified {
+		return sale.ErrEmailNotVerified
+	}
+	return nil
 }
 
 // validateFulfillment comprueba la forma de entrega y, si es a domicilio, que
@@ -268,9 +300,11 @@ func priceCart(
 				CardID:    it.CardID,
 				CardName:  it.CardName,
 				Language:  it.Language,
-				Quantity:  it.Quantity,
-				PriceCOP:  priceCOP,
-				PriceUSD:  it.PriceUSD,
+				// La variante dice qué copia despachar; se guarda como snapshot.
+				VariantName: it.VariantName,
+				Quantity:    it.Quantity,
+				PriceCOP:    priceCOP,
+				PriceUSD:    it.PriceUSD,
 			})
 		}
 	}

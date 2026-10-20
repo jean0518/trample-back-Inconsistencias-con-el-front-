@@ -59,21 +59,23 @@ func (uc *CartUseCase) UpdateQuantity(ctx context.Context, userID string, id int
 	return uc.repo.UpdateQuantity(ctx, userID, id, quantity)
 }
 
-// ListLogs devuelve el historial de reservas (panel admin), opcionalmente
-// filtrado por estado (reserved | returned | sold).
-func (uc *CartUseCase) ListLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error) {
-	if limit <= 0 {
-		limit = 100
+// ListLogs devuelve el historial de reservas de cartas y productos (panel
+// admin) con filtros, y el total sin paginar.
+func (uc *CartUseCase) ListLogs(ctx context.Context, f reservation.LogFilter) ([]reservation.ReservationLog, int, error) {
+	switch f.Status {
+	case "", reservation.LogReserved, reservation.LogReturned, reservation.LogSold:
+	default:
+		return nil, 0, reservation.ErrInvalidLogFilter
 	}
-	if limit > 500 {
-		limit = 500
+	switch f.Kind {
+	case "", reservation.KindCard, reservation.KindProduct:
+	default:
+		return nil, 0, reservation.ErrInvalidLogFilter
 	}
-	logs, err := uc.repo.ListReservationLogs(ctx, status, limit, offset)
-	if err != nil {
-		return nil, err
+	if f.Limit <= 0 {
+		f.Limit = 100
 	}
-	if logs == nil {
-		logs = []reservation.ReservationLog{}
-	}
-	return logs, nil
+	f.Limit = min(f.Limit, 500)
+	f.Offset = max(f.Offset, 0)
+	return uc.repo.ListReservationLogs(ctx, f)
 }

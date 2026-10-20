@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"trample-back/internal/domain/reservation"
@@ -474,6 +475,7 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID string, id in
 		PriceUSD:      details.PriceUSD,
 		PriceCOP:      details.PriceCOP,
 		Status:        reservation.LogReturned,
+		ReturnReason:  reservation.ReturnRemoved,
 	}); err != nil {
 		return err
 	}
@@ -594,9 +596,9 @@ func (r *ReservationRepository) UpdateQuantity(ctx context.Context, userID strin
 	}
 
 	// Historico: la diferencia se reservó (subió) o se devolvió (bajó).
-	status, delta := reservation.LogReserved, quantity-previous
+	status, delta, reason := reservation.LogReserved, quantity-previous, ""
 	if delta < 0 {
-		status, delta = reservation.LogReturned, -delta
+		status, delta, reason = reservation.LogReturned, -delta, reservation.ReturnRemoved
 	}
 	if err := logReservation(ctx, tx, reservation.ReservationLog{
 		ReservationID: id,
@@ -609,6 +611,7 @@ func (r *ReservationRepository) UpdateQuantity(ctx context.Context, userID strin
 		PriceUSD:      res.PriceUSD,
 		PriceCOP:      res.PriceCOP,
 		Status:        status,
+		ReturnReason:  reason,
 	}); err != nil {
 		return reservation.Reservation{}, err
 	}
@@ -679,6 +682,7 @@ func (r *ReservationRepository) ReleaseExpired(ctx context.Context) (int64, erro
 			PriceUSD:      e.details.PriceUSD,
 			PriceCOP:      e.details.PriceCOP,
 			Status:        reservation.LogReturned,
+			ReturnReason:  reservation.ReturnExpired,
 		}); err != nil {
 			return 0, err
 		}
@@ -712,56 +716,120 @@ func logReservation(ctx context.Context, tx pgx.Tx, l reservation.ReservationLog
 		INSERT INTO cart_reservation_logs
 			(reservation_id, user_id, customer_name, customer_email,
 			 card_id, card_name, variant_name, language, quantity,
-			 price_usd, price_cop, status)
+			 price_usd, price_cop, status, return_reason)
 		SELECT $1, $2,
 		       TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')), COALESCE(u.email,''),
-		       $3, $4, $5, $6, $7, $8, $9, $10
+		       $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')
 		FROM users u
 		WHERE u.id = $2
 	`, l.ReservationID, l.UserID, l.CardID, l.CardName, l.VariantName, l.Language,
-		l.Quantity, l.PriceUSD, l.PriceCOP, l.Status); err != nil {
+		l.Quantity, l.PriceUSD, l.PriceCOP, l.Status, l.ReturnReason); err != nil {
 		return fmt.Errorf("registrar log de reserva: %w", err)
 	}
 	return nil
 }
 
-// ListReservationLogs devuelve el historial de reservas, más recientes
-// primero, con paginación y filtro opcional por estado.
-func (r *ReservationRepository) ListReservationLogs(ctx context.Context, status string, limit, offset int) ([]reservation.ReservationLog, error) {
-	q := `
-		SELECT id, reservation_id, COALESCE(user_id::text, ''), customer_name, customer_email,
-		       card_id, card_name, variant_name, language, quantity,
-		       price_usd, price_cop, status, created_at
-		FROM cart_reservation_logs
-	`
-	var args []any
-	if status != "" {
-		q += ` WHERE status = $1`
-		args = append(args, status)
+// reservationLogsSQL une el historial de reservas de cartas y de productos con
+// el estado actual de cada reserva: cuándo vence (solo si sigue activa) y si la
+// retiene un pago en línea abierto.
+const reservationLogsSQL = `
+	SELECT 'card' AS kind, l.id, l.reservation_id, COALESCE(l.user_id::text, '') AS user_id,
+	       l.customer_name, l.customer_email,
+	       l.card_id, l.card_name, l.variant_name, l.language,
+	       0::bigint AS product_id, ''::text AS title,
+	       l.quantity, l.price_usd::float8 AS price_usd, l.price_cop::float8 AS price_cop,
+	       l.status, COALESCE(l.return_reason, '') AS return_reason, l.created_at,
+	       CASE WHEN cr.status = 'active' THEN cr.expires_at END AS expires_at,
+	       COALESCE(cr.status = 'active' AND EXISTS (
+	           SELECT 1 FROM payment_checkouts pc
+	           WHERE pc.status = 'open' AND pc.expires_at > now() AND cr.id = ANY(pc.reservation_ids)), false) AS in_checkout
+	FROM cart_reservation_logs l
+	LEFT JOIN cart_reservations cr ON cr.id = l.reservation_id
+	UNION ALL
+	SELECT 'product', l.id, l.reservation_id, COALESCE(l.user_id::text, ''),
+	       l.customer_name, l.customer_email,
+	       0::bigint, ''::text, ''::text, ''::text,
+	       COALESCE(l.product_id, 0), l.title,
+	       l.quantity, 0::float8, l.price_cop::float8,
+	       l.status, COALESCE(l.return_reason, ''), l.created_at,
+	       CASE WHEN pr.status = 'active' THEN pr.expires_at END,
+	       COALESCE(pr.status = 'active' AND EXISTS (
+	           SELECT 1 FROM payment_checkouts pc
+	           WHERE pc.status = 'open' AND pc.expires_at > now() AND pr.id = ANY(pc.product_reservation_ids)), false)
+	FROM product_reservation_logs l
+	LEFT JOIN product_reservations pr ON pr.id = l.reservation_id
+`
+
+// ListReservationLogs devuelve el historial de reservas de cartas y productos,
+// más recientes primero, con filtros y el total de resultados sin paginar.
+func (r *ReservationRepository) ListReservationLogs(ctx context.Context, f reservation.LogFilter) ([]reservation.ReservationLog, int, error) {
+	var (
+		conds []string
+		args  []any
+	)
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
 	}
-	q += ` ORDER BY created_at DESC, id DESC`
-	if limit > 0 {
-		args = append(args, limit, offset)
-		q += fmt.Sprintf(` LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
+	if !f.From.IsZero() {
+		conds = append(conds, "created_at >= "+arg(f.From))
+	}
+	if !f.To.IsZero() {
+		conds = append(conds, "created_at < "+arg(f.To))
+	}
+	if f.Status != "" {
+		conds = append(conds, "status = "+arg(f.Status))
+	}
+	if f.Kind != "" {
+		conds = append(conds, "kind = "+arg(f.Kind))
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		like := arg("%" + escapeLike(q) + "%")
+		conds = append(conds, "(customer_name ILIKE "+like+" OR customer_email ILIKE "+like+
+			" OR card_name ILIKE "+like+" OR title ILIKE "+like+")")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
 	}
 
-	rows, err := r.db.Query(ctx, q, args...)
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM (`+reservationLogsSQL+`) logs`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("contar logs de reserva: %w", err)
+	}
+
+	n := len(args)
+	rows, err := r.db.Query(ctx, `
+		SELECT kind, id, reservation_id, user_id, customer_name, customer_email,
+		       card_id, card_name, variant_name, language, product_id, title,
+		       quantity, price_usd, price_cop, status, return_reason, created_at,
+		       expires_at, in_checkout
+		FROM (`+reservationLogsSQL+`) logs`+where+
+		fmt.Sprintf(` ORDER BY created_at DESC, kind, id DESC LIMIT $%d OFFSET $%d`, n+1, n+2),
+		append(args, f.Limit, f.Offset)...)
 	if err != nil {
-		return nil, fmt.Errorf("listar logs de reserva: %w", err)
+		return nil, 0, fmt.Errorf("listar logs de reserva: %w", err)
 	}
 	defer rows.Close()
 
-	var out []reservation.ReservationLog
+	out := []reservation.ReservationLog{}
 	for rows.Next() {
-		var l reservation.ReservationLog
+		var (
+			l         reservation.ReservationLog
+			expiresAt *time.Time
+		)
 		if err := rows.Scan(
-			&l.ID, &l.ReservationID, &l.UserID, &l.CustomerName, &l.CustomerEmail,
-			&l.CardID, &l.CardName, &l.VariantName, &l.Language, &l.Quantity,
-			&l.PriceUSD, &l.PriceCOP, &l.Status, &l.CreatedAt,
+			&l.Kind, &l.ID, &l.ReservationID, &l.UserID, &l.CustomerName, &l.CustomerEmail,
+			&l.CardID, &l.CardName, &l.VariantName, &l.Language, &l.ProductID, &l.Title,
+			&l.Quantity, &l.PriceUSD, &l.PriceCOP, &l.Status, &l.ReturnReason, &l.CreatedAt,
+			&expiresAt, &l.InCheckout,
 		); err != nil {
-			return nil, fmt.Errorf("escanear log de reserva: %w", err)
+			return nil, 0, fmt.Errorf("escanear log de reserva: %w", err)
+		}
+		if expiresAt != nil {
+			l.ExpiresAt = *expiresAt
 		}
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }

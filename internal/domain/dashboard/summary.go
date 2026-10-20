@@ -42,6 +42,8 @@ type Summary struct {
 	Series []DayCount `json:"series"`
 	// RecentOrders son los pedidos más recientes, del más nuevo al más viejo.
 	RecentOrders []RecentOrder `json:"recent_orders"`
+	// Sealed es el inventario de producto sellado.
+	Sealed SealedInventory `json:"sealed"`
 }
 
 // DayCount es un día de la serie de pedidos.

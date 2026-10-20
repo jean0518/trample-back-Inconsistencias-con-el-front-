@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"trample-back/internal/domain/product"
+	"trample-back/internal/domain/reservation"
 	"trample-back/internal/domain/sale"
 )
 
@@ -152,7 +153,7 @@ func confirmProductReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID s
 	if int(tag.RowsAffected()) != len(ids) {
 		return product.ErrNotFound
 	}
-	return nil
+	return logProductReservationsTx(ctx, tx, ids, nil, reservation.LogSold, "")
 }
 
 // confirmProductReservationsTx confirma las reservas que sostenían un pago ya
@@ -166,25 +167,75 @@ func confirmProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64) (
 	if err := lockProductsOfReservationsTx(ctx, tx, ids); err != nil {
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE product_reservations SET status = 'confirmed'
-		 WHERE id = ANY($1) AND status = 'active'`, ids)
+	confirmed, err := updateProductReservationsTx(ctx, tx, ids, "confirmed")
 	if err != nil {
 		return false, fmt.Errorf("confirmar reservas de productos del pago: %w", err)
 	}
-	return int(tag.RowsAffected()) < len(ids), nil
+	if err := logProductReservationsTx(ctx, tx, confirmed, nil, reservation.LogSold, ""); err != nil {
+		return false, err
+	}
+	return len(confirmed) < len(ids), nil
 }
 
-// releaseProductReservationsTx libera las reservas de producto. Es idempotente:
-// solo toca las que siguen activas.
-func releaseProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64) error {
+// releaseProductReservationsTx libera las reservas de producto y deja el
+// historial 'returned' con su motivo. Es idempotente: solo toca las que siguen
+// activas.
+func releaseProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64, reason string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	released, err := updateProductReservationsTx(ctx, tx, ids, "released")
+	if err != nil {
+		return fmt.Errorf("liberar reservas de productos: %w", err)
+	}
+	return logProductReservationsTx(ctx, tx, released, nil, reservation.LogReturned, reason)
+}
+
+// updateProductReservationsTx pasa las reservas activas de `ids` al estado
+// indicado y devuelve las que cambió.
+func updateProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64, status string) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		UPDATE product_reservations SET status = $2
+		 WHERE id = ANY($1) AND status = 'active'
+		RETURNING id`, ids, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changed []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		changed = append(changed, id)
+	}
+	return changed, rows.Err()
+}
+
+// logProductReservationsTx registra un evento del historial para cada reserva de
+// producto de `ids`, con los datos del cliente y del producto en ese momento.
+// `quantity` nil usa la cantidad actual de cada reserva (vender, devolver todo);
+// con valor, es la cantidad del evento (sumar o quitar unidades).
+func logProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64, quantity *int, status, reason string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE product_reservations SET status = 'released'
-		 WHERE id = ANY($1) AND status = 'active'`, ids); err != nil {
-		return fmt.Errorf("liberar reservas de productos: %w", err)
+		INSERT INTO product_reservation_logs
+			(reservation_id, user_id, customer_name, customer_email,
+			 product_id, title, quantity, price_cop, status, return_reason)
+		SELECT pr.id, pr.user_id,
+		       TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), COALESCE(u.email, ''),
+		       p.id, p.title, COALESCE($2::int, pr.quantity), p.price_cop, $3, NULLIF($4, '')
+		FROM product_reservations pr
+		JOIN products p ON p.id = pr.product_id
+		LEFT JOIN users u ON u.id = pr.user_id
+		WHERE pr.id = ANY($1)`, ids, quantity, status, reason); err != nil {
+		return fmt.Errorf("registrar historial de reservas de productos: %w", err)
 	}
 	return nil
 }

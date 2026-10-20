@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"trample-back/internal/domain/product"
+	"trample-back/internal/domain/reservation"
 )
 
 // ProductReservationRepositoryPG es el stock temporal de los productos. Sigue
@@ -85,6 +86,9 @@ func (r *ProductReservationRepositoryPG) Reserve(ctx context.Context, in product
 		// Si cambió la cantidad, el pago abierto que incluía esta línea ya no
 		// corresponde al carrito.
 		if err := closeProductCheckoutsHoldingTx(ctx, tx, res.ID); err != nil {
+			return err
+		}
+		if err := logProductReservationsTx(ctx, tx, []int64{res.ID}, &in.Quantity, reservation.LogReserved, ""); err != nil {
 			return err
 		}
 
@@ -181,6 +185,9 @@ func (r *ProductReservationRepositoryPG) Remove(ctx context.Context, userID stri
 		}
 		if tag.RowsAffected() == 0 {
 			return product.ErrNotFound
+		}
+		if err := logProductReservationsTx(ctx, tx, []int64{id}, nil, reservation.LogReturned, reservation.ReturnRemoved); err != nil {
+			return err
 		}
 		// Quitar la línea cambia el total: el pago abierto que la incluía ya no sirve.
 		return closeProductCheckoutsHoldingTx(ctx, tx, id)
@@ -282,6 +289,14 @@ func (r *ProductReservationRepositoryPG) UpdateQuantity(ctx context.Context, use
 			UPDATE product_reservations SET quantity = $2 WHERE id = $1`, id, quantity); err != nil {
 			return fmt.Errorf("actualizar cantidad de la reserva de producto: %w", err)
 		}
+		// Historial: la diferencia se reservó (subió) o se devolvió (bajó).
+		status, delta, reason := reservation.LogReserved, quantity-res.Quantity, ""
+		if delta < 0 {
+			status, delta, reason = reservation.LogReturned, -delta, reservation.ReturnRemoved
+		}
+		if err := logProductReservationsTx(ctx, tx, []int64{id}, &delta, status, reason); err != nil {
+			return err
+		}
 		res.Quantity = quantity
 		// Un checkout abierto ya vencido sigue apuntando a la línea con el monto
 		// viejo; se cierra igual que al agregar o quitar.
@@ -293,16 +308,37 @@ func (r *ProductReservationRepositoryPG) UpdateQuantity(ctx context.Context, use
 	return res, nil
 }
 
-// ReleaseExpired libera las reservas vencidas. El stock nunca se descontó al
-// reservar, así que liberar es solo cambiar el estado.
+// ReleaseExpired libera las reservas vencidas y deja el historial 'returned'
+// (vencida). El stock nunca se descontó al reservar, así que liberar es solo
+// cambiar el estado.
 func (r *ProductReservationRepositoryPG) ReleaseExpired(ctx context.Context) (int64, error) {
-	tag, err := r.db.Exec(ctx, `
-		UPDATE product_reservations SET status = 'released'
-		 WHERE status = 'active' AND expires_at <= now()`)
+	var released []int64
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			UPDATE product_reservations SET status = 'released'
+			 WHERE status = 'active' AND expires_at <= now()
+			RETURNING id`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			released = append(released, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return logProductReservationsTx(ctx, tx, released, nil, reservation.LogReturned, reservation.ReturnExpired)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("liberar reservas de productos vencidas: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return int64(len(released)), nil
 }
 
 // closeProductCheckoutsHoldingTx cierra los checkouts abiertos que incluyen la

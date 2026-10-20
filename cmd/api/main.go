@@ -138,7 +138,9 @@ func main() {
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
 	// El pago en línea no registra el pedido: deja listo el checkout con la
 	// referencia de la pasarela. El pedido se crea al aprobarse el pago.
-	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL).WithProducts(productReservationRepo)
+	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL).
+		WithProducts(productReservationRepo).
+		WithEmailVerification(userRepo)
 	listSalesUC := appSale.NewListSalesUseCase(saleRepo)
 	statsSalesUC := appSale.NewSaleStatsUseCase(saleRepo)
 	// Correos de compra (Resend). Sin RESEND_API_KEY se omiten con un log.
@@ -150,20 +152,27 @@ func main() {
 			ContactEmail: cfg.StoreContactMail,
 			Location:     cfg.StoreLocation,
 			Social:       cfg.StoreSocial,
+			WhatsAppURL:  email.WhatsAppLink(cfg.StoreWhatsApp),
 		})
 	} else {
 		log.Warn("RESEND_API_KEY sin configurar: no se enviarán correos a los clientes")
 	}
-	purchaseNotifier := appSale.NewPurchaseNotifier(userRepo, mailer)
+	// Los avisos de pedidos llegan a todos los usuarios con rol admin.
+	purchaseNotifier := appSale.NewPurchaseNotifier(userRepo, mailer).WithAdmins(userRepo)
 	verifyEmailUC := appAuth.NewVerifyEmailUseCase(userRepo, mailer, cfg.FrontendURL)
 	registerUC := appAuth.NewRegisterUseCase(userRepo, verifyEmailUC)
-	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo).WithProducts(productReservationRepo).WithNotifier(purchaseNotifier)
+	confirmSaleUC := appSale.NewConfirmSaleUseCase(reservationRepo, saleRepo).
+		WithProducts(productReservationRepo).
+		WithNotifier(purchaseNotifier).
+		WithEmailVerification(userRepo)
 	pickupOrdersUC := appSale.NewPickupOrdersUseCase(saleRepo, purchaseNotifier)
 	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
 	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
-	expireCheckoutsUC := appSale.NewExpireCheckoutsUseCase(saleRepo)
+	expireCheckoutsUC := appSale.NewExpireCheckoutsUseCase(saleRepo).WithNotifier(purchaseNotifier)
+	fulfillmentUC := appSale.NewFulfillmentUseCase(saleRepo, purchaseNotifier)
 	reconcileCheckoutsUC := appSale.NewReconcileCheckoutsUseCase(saleRepo, checkPaymentUC)
 	dashboardSummaryUC := appDashboard.NewSummaryUseCase(dashboardRepo)
+	salesBreakdownUC := appDashboard.NewBreakdownUseCase(dashboardRepo)
 
 	// Router
 	secureCookie := cfg.Env == "production"
@@ -181,8 +190,8 @@ func main() {
 		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
 		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		Cart:           httpadapter.NewCartHandler(cartUC),
-		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC),
-		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC),
+		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC, fulfillmentUC),
+		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC, salesBreakdownUC),
 		Inventory:      httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
 		CardImages:     httpadapter.NewCardImageHandler(cardImageRepo),
 		Products:       httpadapter.NewProductHandler(manageProductsUC, queryProductsUC, productRepo),
@@ -218,7 +227,8 @@ func main() {
 	go expireCheckoutsLoop(log, expireCheckoutsUC)
 
 	// Cancela los pedidos de recogida en tienda que no se recogieron dentro de
-	// los 2 días hábiles y devuelve su stock al inventario.
+	// los 2 días hábiles y devuelve su stock al inventario; antes, el día
+	// anterior al plazo, les recuerda a los clientes.
 	go expirePickupsLoop(bgCtx, log, pickupOrdersUC)
 
 	// Pregunta a la pasarela por los pagos que pudieron cobrarse sin que el
@@ -361,8 +371,9 @@ func expireCheckoutsLoop(log *slog.Logger, expire *appSale.ExpireCheckoutsUseCas
 	}
 }
 
-// expirePickupsLoop cancela periódicamente los pedidos de recogida vencidos. El
-// plazo vence a las 23:59:59, así que revisar cada 10 minutos basta.
+// expirePickupsLoop cancela periódicamente los pedidos de recogida vencidos y
+// envía los recordatorios del día anterior. El plazo vence a las 23:59:59, así
+// que revisar cada 10 minutos basta.
 func expirePickupsLoop(ctx context.Context, log *slog.Logger, pickups *appSale.PickupOrdersUseCase) {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
@@ -375,6 +386,15 @@ func expirePickupsLoop(ctx context.Context, log *slog.Logger, pickups *appSale.P
 		}
 		if n > 0 {
 			log.Info("pedidos de recogida vencidos cancelados", slog.Int("count", n))
+		}
+		runCtx, cancel = context.WithTimeout(ctx, time.Minute)
+		sent, err := pickups.SendReminders(runCtx)
+		cancel()
+		if err != nil {
+			log.Error("recordar pedidos de recogida", slog.Any("error", err))
+		}
+		if sent > 0 {
+			log.Info("recordatorios de recogida enviados", slog.Int("count", sent))
 		}
 		select {
 		case <-ctx.Done():

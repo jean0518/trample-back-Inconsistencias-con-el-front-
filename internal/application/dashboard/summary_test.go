@@ -18,6 +18,10 @@ type fakeDashboardRepo struct {
 	gotSince time.Time
 	gotToday time.Time
 	lastLim  int
+
+	sealed            []dashboard.SealedProduct
+	current, previous []dashboard.BreakdownSale
+	ranges            [][2]time.Time
 }
 
 func (f *fakeDashboardRepo) InventoryKPIs(context.Context) (dashboard.KPIs, error) {
@@ -39,6 +43,18 @@ func (f *fakeDashboardRepo) SalesSeries(context.Context, time.Time) ([]dashboard
 func (f *fakeDashboardRepo) RecentSales(_ context.Context, limit int) ([]dashboard.RecentOrder, error) {
 	f.lastLim = limit
 	return f.recent, nil
+}
+
+func (f *fakeDashboardRepo) SealedProducts(context.Context) ([]dashboard.SealedProduct, error) {
+	return f.sealed, nil
+}
+
+func (f *fakeDashboardRepo) BreakdownSales(_ context.Context, from, to time.Time) ([]dashboard.BreakdownSale, error) {
+	f.ranges = append(f.ranges, [2]time.Time{from, to})
+	if len(f.ranges) == 1 {
+		return f.current, nil
+	}
+	return f.previous, nil
 }
 
 // newTestUseCase fija el reloj para que las fechas de la serie sean

@@ -28,4 +28,12 @@ type DashboardRepository interface {
 	// RecentSales devuelve los pedidos más recientes con su comprador y el
 	// conteo de renglones, del más nuevo al más viejo.
 	RecentSales(ctx context.Context, limit int) ([]dashboard.RecentOrder, error)
+
+	// SealedProducts devuelve los productos sellados con su stock y lo
+	// reservado ahora, para el bloque de inventario del resumen.
+	SealedProducts(ctx context.Context) ([]dashboard.SealedProduct, error)
+
+	// BreakdownSales devuelve las ventas creadas en [from, to), con las líneas
+	// de las pagadas, para el desglose de ventas.
+	BreakdownSales(ctx context.Context, from, to time.Time) ([]dashboard.BreakdownSale, error)
 }

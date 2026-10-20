@@ -59,6 +59,9 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			// Los listados paginados devuelven el total en este header; sin
+			// exponerlo, el navegador no deja que el frontend lo lea.
+			w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -182,6 +185,8 @@ func NewRouter(h Handlers) http.Handler {
 		r.Post("/checkout", h.Sales.CreateCheckout)
 		// Validación del pago: consulta a la pasarela y, si entró, crea el pedido.
 		r.Post("/payment-status", h.Sales.CheckPaymentStatus)
+		// El cliente pide cancelar su pedido de recogida; el staff decide.
+		r.Post("/{id}/cancel-request", h.Sales.RequestPickupCancel)
 	})
 
 	// Admin — sincronización e importación (todo el staff del panel)
@@ -211,11 +216,22 @@ func NewRouter(h Handlers) http.Handler {
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermReservas)).
 			Get("/reservation-logs", h.Cart.ListReservationLogs)
 		r.Get("/sales", h.Sales.ListAdminSales)
+		r.Get("/sales/counts", h.Sales.SaleCounts)
 		// Pedidos de recogida en tienda: pagarlos en el local o cancelarlos.
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
 			Post("/sales/{id}/mark-paid", h.Sales.MarkPickupPaid)
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
 			Post("/sales/{id}/cancel", h.Sales.CancelPickup)
+		// Cancelación solicitada por el cliente: aprobarla es /cancel.
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/reject-cancel", h.Sales.RejectPickupCancel)
+		// Pedidos en revisión (pago tardío o con otro monto) y despacho.
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/confirm-review", h.Sales.ConfirmReview)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/ship", h.Sales.ShipOrder)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/deliver", h.Sales.DeliverOrder)
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermResumen)).
 			Get("/sales-stats", h.Sales.SalesStats)
 
@@ -223,6 +239,8 @@ func NewRouter(h Handlers) http.Handler {
 		// recientes, en vez de varias consultas que el frontend debe contar.
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermResumen)).
 			Get("/dashboard/summary", h.Dashboard.GetSummary)
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermVentas)).
+			Get("/dashboard/sales-breakdown", h.Dashboard.GetSalesBreakdown)
 
 		r.Get("/panels", h.AdminUsers.ListPanels)
 

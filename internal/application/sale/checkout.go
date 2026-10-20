@@ -31,6 +31,7 @@ type CreateCheckoutUseCase struct {
 	gateway      out.PaymentGateway
 	holdMinutes  int
 	frontendURL  string
+	users        userFinder
 }
 
 func NewCreateCheckoutUseCase(
@@ -56,6 +57,13 @@ func NewCreateCheckoutUseCase(
 // esto, un carrito con reservas de productos se rechaza.
 func (uc *CreateCheckoutUseCase) WithProducts(p out.ProductReservationRepository) *CreateCheckoutUseCase {
 	uc.products = p
+	return uc
+}
+
+// WithEmailVerification exige que el cliente haya verificado su correo antes de
+// pagar (el staff queda exento).
+func (uc *CreateCheckoutUseCase) WithEmailVerification(users userFinder) *CreateCheckoutUseCase {
+	uc.users = users
 	return uc
 }
 
@@ -91,6 +99,9 @@ func (uc *CreateCheckoutUseCase) Execute(ctx context.Context, input sale.Confirm
 	// que debe apartarse sin pago.
 	if input.Fulfillment == sale.FulfillmentPickup {
 		return CreateCheckoutResult{}, sale.ErrInvalidInput
+	}
+	if err := requireVerifiedEmail(ctx, uc.users, input); err != nil {
+		return CreateCheckoutResult{}, err
 	}
 
 	cart, err := priceCart(ctx, uc.reservations, uc.products, input.UserID, ids, productIDs, input.Fulfillment)

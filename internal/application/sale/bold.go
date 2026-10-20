@@ -118,11 +118,31 @@ func (uc *CheckPaymentStatusUseCase) Execute(ctx context.Context, userID, refere
 		if err != nil {
 			return sale.PaymentStatus{}, err
 		}
+		// Se avisa una sola vez: la reconciliación vuelve a consultar los
+		// checkouts fallidos, y para entonces ya estaba en failed.
+		if checkout.Status != sale.CheckoutFailed {
+			uc.notifier.PaymentFailed(checkout.UserID, out.PaymentFailure{Reference: reference, TotalCOP: checkout.TotalCOP, Voided: true})
+		}
 		return sale.PaymentStatus{Reference: reference, Status: updated.Status, GatewayStatus: tx.Status}, nil
+	case payment.StatusProcessing, payment.StatusPending:
+		// El pago está en proceso (PSE, transferencia bancaria): el pedido se da
+		// por recibido y se espera hasta PendingPaymentWindow. Si no se aprueba
+		// en ese tiempo, ExpireCheckouts lo cancela y devuelve el stock.
+		c, first, err := uc.sales.MarkCheckoutPending(ctx, reference, sale.PendingPaymentWindow, paymentGrace)
+		if err != nil {
+			slog.Warn("registrar pago en proceso", slog.String("reference", reference), slog.Any("error", err))
+			return status, nil
+		}
+		if first {
+			slog.Info("pago en proceso: pedido recibido", slog.String("reference", reference))
+			uc.notifier.PaymentPending(c)
+		}
+		status.GatewayStatus = tx.Status
+		return status, nil
 	default:
-		// processing, pending, not_found o desconocido: el pago sigue en
-		// curso. Se devuelve el estado local sin cambios; el webhook o una
-		// consulta posterior la reconciliarán.
+		// not_found o desconocido: el cliente sigue en la pasarela. Se devuelve
+		// el estado local sin cambios; el webhook o una consulta posterior lo
+		// reconciliarán.
 		return status, nil
 	}
 }
@@ -224,6 +244,7 @@ func (uc *ProcessPaymentEventUseCase) apply(ctx context.Context, evt payment.Eve
 		}
 		slog.Warn("pago anulado en la pasarela: revisar el pedido", slog.String("reference", evt.Reference))
 		uc.notifyFailure(ctx, evt.Reference, true)
+		uc.notifyVoidedSale(ctx, evt.Reference)
 	case EventVoidRejected:
 		// La anulación falló: el pago sigue vigente. No hay nada que cambiar.
 	}
@@ -249,6 +270,24 @@ func (uc *ProcessPaymentEventUseCase) notifyFailure(ctx context.Context, referen
 	uc.notifier.PaymentFailed(c.UserID, out.PaymentFailure{Reference: reference, TotalCOP: c.TotalCOP, Voided: voided})
 }
 
+// notifyVoidedSale avisa a los admins si el pago anulado ya se había convertido
+// en pedido: hay que frenar el despacho. Como notifyFailure, no propaga errores.
+func (uc *ProcessPaymentEventUseCase) notifyVoidedSale(ctx context.Context, reference string) {
+	if uc.notifier == nil {
+		return
+	}
+	c, err := uc.sales.FindCheckoutByReference(ctx, reference)
+	if err != nil || c.SaleID == 0 {
+		return
+	}
+	s, err := uc.sales.FindByID(ctx, c.SaleID)
+	if err != nil {
+		slog.Warn("aviso de pago anulado: buscar pedido", slog.String("reference", reference), slog.Any("error", err))
+		return
+	}
+	uc.notifier.PaymentVoided(s)
+}
+
 // logIfNeedsReview deja constancia de los pagos aprobados que requieren que una
 // persona los revise (pago tardío, monto distinto, stock ya liberado).
 func logIfNeedsReview(s sale.Sale) {
@@ -262,17 +301,34 @@ func logIfNeedsReview(s sale.Sale) {
 // dentro de la ventana de retención, devolviendo el stock retenido. Lo ejecuta
 // un bucle periódico desde el arranque de la API.
 type ExpireCheckoutsUseCase struct {
-	sales out.SaleRepository
+	sales    out.SaleRepository
+	notifier *PurchaseNotifier
 }
 
 func NewExpireCheckoutsUseCase(sales out.SaleRepository) *ExpireCheckoutsUseCase {
 	return &ExpireCheckoutsUseCase{sales: sales}
 }
 
+// WithNotifier activa el correo de "pedido cancelado" a los clientes cuyo pago
+// quedó en proceso y no se confirmó a tiempo.
+func (uc *ExpireCheckoutsUseCase) WithNotifier(n *PurchaseNotifier) *ExpireCheckoutsUseCase {
+	uc.notifier = n
+	return uc
+}
+
 // Execute devuelve cuántos checkouts cerró. Espera `paymentGraceMinutes` más allá
 // del vencimiento para no soltar el stock de un pago que aún se está resolviendo.
+//
+// Solo se avisa a quien ya había recibido "pedido recibido" (pago en proceso):
+// un checkout que el cliente abrió y abandonó nunca fue un pedido para él.
 func (uc *ExpireCheckoutsUseCase) Execute(ctx context.Context) (int64, error) {
-	return uc.sales.ExpireCheckouts(ctx, paymentGrace)
+	expired, err := uc.sales.ExpireCheckouts(ctx, paymentGrace)
+	for _, c := range expired {
+		if !c.PaymentPendingAt.IsZero() {
+			uc.notifier.PaymentFailed(c.UserID, out.PaymentFailure{Reference: c.Reference, TotalCOP: c.TotalCOP, Expired: true})
+		}
+	}
+	return int64(len(expired)), err
 }
 
 // ReconcileCheckoutsUseCase pregunta a la pasarela por los pagos que pueden

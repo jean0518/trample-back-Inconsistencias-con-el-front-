@@ -36,13 +36,52 @@ func (uc *PickupOrdersUseCase) MarkPaid(ctx context.Context, id int64) (sale.Sal
 }
 
 // Cancel cancela un pedido pendiente (decisión del staff) y devuelve su stock.
+// Si el cliente había pedido la cancelación, esto la aprueba.
 func (uc *PickupOrdersUseCase) Cancel(ctx context.Context, id int64) (sale.Sale, error) {
 	s, err := uc.sales.CancelPickup(ctx, id)
 	if err != nil {
 		return sale.Sale{}, err
 	}
-	uc.notifier.PickupCancelled(s, false)
+	reason := out.CancelByStore
+	if !s.CancelRequestedAt.IsZero() {
+		reason = out.CancelRequested
+	}
+	uc.notifier.PickupCancelled(s, reason)
 	return s, nil
+}
+
+// RequestCancel registra que el cliente quiere cancelar su pedido de recogida.
+// No se cancela todavía: el staff la aprueba (Cancel) o la rechaza
+// (RejectCancel). Solo aplica a la recogida en tienda; un pedido pagado en línea
+// se gestiona por WhatsApp.
+func (uc *PickupOrdersUseCase) RequestCancel(ctx context.Context, id int64, userID string) (sale.Sale, error) {
+	s, err := uc.sales.RequestPickupCancel(ctx, id, userID)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	uc.notifier.CancelRequested(s)
+	return s, nil
+}
+
+// RejectCancel rechaza la solicitud de cancelación: el pedido sigue apartado.
+func (uc *PickupOrdersUseCase) RejectCancel(ctx context.Context, id int64) (sale.Sale, error) {
+	s, err := uc.sales.RejectPickupCancel(ctx, id)
+	if err != nil {
+		return sale.Sale{}, err
+	}
+	uc.notifier.CancelRejected(s)
+	return s, nil
+}
+
+// SendReminders recuerda a los clientes cuyo plazo de recogida vence mañana.
+// Devuelve cuántos recordatorios envió; lo ejecuta el mismo bucle que vence los
+// pedidos.
+func (uc *PickupOrdersUseCase) SendReminders(ctx context.Context) (int, error) {
+	due, err := uc.sales.ClaimPickupReminders(ctx, uc.now())
+	for _, s := range due {
+		uc.notifier.PickupReminder(s)
+	}
+	return len(due), err
 }
 
 // ExpireOverdue cancela los pedidos cuyo plazo de recogida venció, devuelve su
@@ -52,7 +91,7 @@ func (uc *PickupOrdersUseCase) ExpireOverdue(ctx context.Context) (int, error) {
 	cancelled, err := uc.sales.ExpirePickups(ctx, uc.now())
 	for _, s := range cancelled {
 		slog.Info("pedido de recogida vencido y cancelado", slog.Int64("sale_id", s.ID))
-		uc.notifier.PickupCancelled(s, true)
+		uc.notifier.PickupCancelled(s, out.CancelExpired)
 	}
 	return len(cancelled), err
 }

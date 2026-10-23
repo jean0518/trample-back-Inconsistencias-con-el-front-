@@ -12,6 +12,8 @@ var ErrInvalidLogFilter = errors.New("filtro del historial de reservas inválido
 const (
 	// LogReserved: el cliente agregó la carta al carrito (reserva activa).
 	LogReserved = "reserved"
+	// LogReservada: reserva directa/confirmada por el administrador.
+	LogReservada = "reservada"
 	// LogReturned: la reserva se devolvió al stock (la eliminó o expiró).
 	LogReturned = "returned"
 	// LogSold: el cliente confirmó el pedido y la carta se vendió.

@@ -194,6 +194,28 @@ func (r *ProductReservationRepositoryPG) Remove(ctx context.Context, userID stri
 	})
 }
 
+// ReleaseActiveByID libera una reserva activa de producto sin importar el
+// usuario. Se usa desde el panel admin para destrabar reservas que quedaron
+// abiertas. Deja el evento 'returned' en el historial y cierra los pagos que la
+// estuvieran reteniendo.
+func (r *ProductReservationRepositoryPG) ReleaseActiveByID(ctx context.Context, id int64) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE product_reservations SET status = 'released'
+			 WHERE id = $1 AND status = 'active'`, id)
+		if err != nil {
+			return fmt.Errorf("liberar reserva de producto: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return product.ErrNotFound
+		}
+		if err := logProductReservationsTx(ctx, tx, []int64{id}, nil, reservation.LogReturned, reservation.ReturnRemoved); err != nil {
+			return err
+		}
+		return closeProductCheckoutsHoldingTx(ctx, tx, id)
+	})
+}
+
 // UpdateQuantity fija la cantidad de una reserva activa del usuario. Bloquea
 // primero el producto y después la reserva, el mismo orden que Reserve, para
 // serializar contra otras reservas del producto. expires_at no se toca.

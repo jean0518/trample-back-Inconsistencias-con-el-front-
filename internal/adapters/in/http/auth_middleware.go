@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"trample-back/internal/domain/auth"
+	"trample-back/internal/ports/out"
 )
 
 const authCtxKey ctxKey = "auth_user"
@@ -35,10 +36,20 @@ type authClaims struct {
 
 type AuthMiddleware struct {
 	secret []byte
+	// users es opcional: si está presente, cada petición autenticada comprueba
+	// que el usuario siga activo en la base (así al desactivar el staff se
+	// invalida al instante aunque su JWT siga vigente).
+	users out.UserRepository
 }
 
 func NewAuthMiddleware(secret []byte) *AuthMiddleware {
 	return &AuthMiddleware{secret: secret}
+}
+
+// WithUserRepository habilita la comprobación de estado por petición.
+func (m *AuthMiddleware) WithUserRepository(users out.UserRepository) *AuthMiddleware {
+	m.users = users
+	return m
 }
 
 // RequireAuth valida el JWT desde la cookie HttpOnly o el header Authorization: Bearer <token>.
@@ -84,6 +95,16 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 		if err != nil || sub == "" {
 			Error(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+
+		// Un usuario desactivado pierde el acceso de inmediato, aunque su token
+		// siga vigente: se revalida el estado contra la base en cada petición.
+		if m.users != nil {
+			user, err := m.users.FindByID(r.Context(), sub)
+			if err != nil || !user.IsActive() {
+				Error(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 		}
 
 		perms := claims.Permissions

@@ -24,15 +24,15 @@ func NewReservationRepository(db *pgxpool.Pool) *ReservationRepository {
 // listingRowReusable es la proyección compartida de un inventory_listings
 // enriquecido con los datos de la carta para mostrar en el carrito.
 type listingRow struct {
-	ListingID  int64
-	CardID     int64
-	CardName   string
+	ListingID   int64
+	CardID      int64
+	CardName    string
 	VariantName string
-	Language   string
-	Quantity   int
-	PriceUSD   float64
-	PriceCOP   float64
-	CardImage  string
+	Language    string
+	Quantity    int
+	PriceUSD    float64
+	PriceCOP    float64
+	CardImage   string
 }
 
 const listingSelect = `
@@ -94,15 +94,15 @@ func (r *ReservationRepository) FindListingForReserve(ctx context.Context, cardI
 		return reservation.ListingInfo{}, fmt.Errorf("buscar listing para reserva: %w", err)
 	}
 	return reservation.ListingInfo{
-		ListingID:  l.ListingID,
-		CardID:     l.CardID,
-		CardName:   l.CardName,
+		ListingID:   l.ListingID,
+		CardID:      l.CardID,
+		CardName:    l.CardName,
 		VariantName: l.VariantName,
-		Language:   l.Language,
-		Quantity:   l.Quantity,
-		PriceUSD:   l.PriceUSD,
-		PriceCOP:   l.PriceCOP,
-		CardImage:  l.CardImage,
+		Language:    l.Language,
+		Quantity:    l.Quantity,
+		PriceUSD:    l.PriceUSD,
+		PriceCOP:    l.PriceCOP,
+		CardImage:   l.CardImage,
 	}, nil
 }
 
@@ -237,7 +237,7 @@ func (r *ReservationRepository) ListActiveByUser(ctx context.Context, userID str
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
-		       il.language, il.price_usd, il.price_cop, ` + maxQuantitySQL + `,
+		       il.language, il.price_usd, il.price_cop, `+maxQuantitySQL+`,
 		       COALESCE(
 		           (SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = lcv.id AND vi.small_url <> '' LIMIT 1),
 		           (SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
@@ -275,7 +275,7 @@ func (r *ReservationRepository) ListActiveByUserAndIDs(ctx context.Context, user
 	rows, err := r.db.Query(ctx, `
 		SELECT cr.id, cr.listing_id, cr.quantity, cr.expires_at,
 		       c.id, c.name, lcv.variant_name, cr.listing_id,
-		       il.language, il.price_usd, il.price_cop, ` + maxQuantitySQL + `,
+		       il.language, il.price_usd, il.price_cop, `+maxQuantitySQL+`,
 		       COALESCE(
 		           (SELECT vi.small_url FROM card_images vi WHERE vi.variant_id = lcv.id AND vi.small_url <> '' LIMIT 1),
 		           (SELECT ci.small_url FROM card_images ci WHERE ci.card_id = c.id AND ci.small_url <> '' LIMIT 1),
@@ -343,9 +343,9 @@ func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, 
 	}
 
 	type confirmed struct {
-		id        int64
-		quantity  int
-		details   reservation.Reservation
+		id       int64
+		quantity int
+		details  reservation.Reservation
 	}
 	var items []confirmed
 	for rows.Next() {
@@ -481,6 +481,62 @@ func (r *ReservationRepository) Remove(ctx context.Context, userID string, id in
 	}
 
 	return tx.Commit(ctx)
+}
+
+// ReleaseActiveByID libera una reserva activa sin importar el usuario. Es la
+// acción del panel admin para quitar una reserva que quedó atascada en el
+// carrito. Registrar el evento en el historial deja rastro de quién la tenía y
+// cuándo se liberó; también cierra cualquier pago abierto que la retuviera.
+func (r *ReservationRepository) ReleaseActiveByID(ctx context.Context, id int64) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var (
+			quantity int
+			details  reservation.Reservation
+		)
+		err := tx.QueryRow(ctx, `
+			SELECT cr.quantity, cr.user_id,
+			       c.id, c.name, cv.variant_name, il.language, il.price_usd, il.price_cop
+			FROM cart_reservations cr
+			JOIN inventory_listings il ON il.id = cr.listing_id
+			JOIN card_variants cv ON cv.id = il.variant_id
+			JOIN cards c ON c.id = cv.card_id
+			WHERE cr.id = $1 AND cr.status = 'active'
+			FOR UPDATE
+		`, id).Scan(
+			&quantity, &details.UserID,
+			&details.CardID, &details.CardName, &details.VariantName, &details.Language,
+			&details.PriceUSD, &details.PriceCOP,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return reservation.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("buscar reserva a liberar: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE cart_reservations SET status = 'released' WHERE id = $1`,
+			id,
+		); err != nil {
+			return fmt.Errorf("liberar reserva: %w", err)
+		}
+		if err := closeCheckoutsHoldingTx(ctx, tx, id); err != nil {
+			return err
+		}
+		return logReservation(ctx, tx, reservation.ReservationLog{
+			ReservationID: id,
+			UserID:        details.UserID,
+			CardID:        details.CardID,
+			CardName:      details.CardName,
+			VariantName:   details.VariantName,
+			Language:      details.Language,
+			Quantity:      quantity,
+			PriceUSD:      details.PriceUSD,
+			PriceCOP:      details.PriceCOP,
+			Status:        reservation.LogReturned,
+			ReturnReason:  reservation.ReturnRemoved,
+		})
+	})
 }
 
 // UpdateQuantity fija la cantidad de una reserva activa del usuario en una

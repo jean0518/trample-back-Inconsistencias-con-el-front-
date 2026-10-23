@@ -15,6 +15,9 @@ type ProductRepository interface {
 	Update(ctx context.Context, id int64, in product.Input) (product.Product, error)
 	// SetStatus oculta o publica el producto.
 	SetStatus(ctx context.Context, id int64, status string) (product.Product, error)
+	// BulkUpdate aplica estado y/o juego a varios productos. Nil = no cambiar.
+	// Devuelve cuántos productos se actualizaron.
+	BulkUpdate(ctx context.Context, ids []int64, status, game *string) (int, error)
 	// Delete borra el producto y sus fotos. Devuelve product.ErrHasSales si ya
 	// se vendió: el historial de ventas no se toca nunca.
 	Delete(ctx context.Context, id int64) error

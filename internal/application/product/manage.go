@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/product"
@@ -31,7 +32,9 @@ type CreateInput struct {
 	PriceCOP    int64
 	Stock       int
 	// Status vacío equivale a publicado.
-	Status string
+	Status   string
+	Language string
+	Game     string
 	// ImageURLs y Uploads se mezclan: en total no pueden pasar de MaxImages. Se
 	// adjuntan en este orden, URLs primero; la primera queda como principal.
 	ImageURLs []string
@@ -55,6 +58,8 @@ func (uc *ManageUseCase) Create(ctx context.Context, adminID string, in CreateIn
 		Description: in.Description,
 		PriceCOP:    in.PriceCOP,
 		Stock:       in.Stock,
+		Language:    in.Language,
+		Game:        in.Game,
 	}.Validate()
 	if err != nil {
 		return product.Product{}, err
@@ -110,6 +115,30 @@ func (uc *ManageUseCase) Update(ctx context.Context, id int64, in product.Input)
 		return product.Product{}, err
 	}
 	return uc.repo.Update(ctx, id, valid)
+}
+
+// BulkUpdate aplica estado y/o juego a los productos seleccionados. Un puntero
+// nil deja ese campo intacto; game vacío quita la clasificación.
+func (uc *ManageUseCase) BulkUpdate(ctx context.Context, ids []int64, status, game *string) (int, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("selecciona al menos un producto")
+	}
+	if len(ids) > 200 {
+		return 0, errors.New("selecciona máximo 200 productos a la vez")
+	}
+	if status != nil {
+		if !product.ValidStatus(*status) {
+			return 0, fmt.Errorf("estado inválido: usa %q o %q", product.StatusActive, product.StatusHidden)
+		}
+	}
+	if game != nil {
+		normalized := strings.TrimSpace(*game)
+		if !product.ValidGame(normalized) {
+			return 0, fmt.Errorf("el juego debe ser %q, %q, %q o vacío", product.GameMagic, product.GamePokemon, product.GameRiftbound)
+		}
+		game = &normalized
+	}
+	return uc.repo.BulkUpdate(ctx, ids, status, game)
 }
 
 // SetStatus oculta o publica el producto.

@@ -46,6 +46,7 @@ const userSelect = `
 	           COALESCE((SELECT ARRAY_AGG(aup.panel_code ORDER BY aup.panel_code)
 	                     FROM admin_user_panels aup WHERE aup.admin_user_id = au.id), '{}')
 	         ELSE COALESCE(u.permissions, '{}') END),
+	       CASE WHEN au.id IS NOT NULL THEN au.status ELSE '' END,
 	       u.email_verified,
 	       COALESCE(u.email_verify_token, ''),
 	       COALESCE(u.email_verify_expires_at, '0001-01-01'::timestamptz)
@@ -56,7 +57,7 @@ const userSelect = `
 func (r *UserRepository) findOne(ctx context.Context, where string, arg any) (auth.User, error) {
 	var u auth.User
 	err := r.db.QueryRow(ctx, userSelect+where, arg).Scan(
-		&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions,
+		&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions, &u.Status,
 		&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyExpiresAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

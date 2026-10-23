@@ -33,6 +33,12 @@ const (
 
 	StatusActive = "active"
 	StatusHidden = "hidden"
+
+	// Juegos admitidos para clasificar productos sellados. El front usa estos
+	// mismos códigos (GameId) para filtrar y editar en bloque.
+	GameMagic     = "magic"
+	GamePokemon   = "pokemon"
+	GameRiftbound = "riftbound"
 )
 
 var (
@@ -64,9 +70,13 @@ type Product struct {
 	PriceCOP    int64
 	// Stock son las unidades totales del producto; Reserved las que hoy sostienen
 	// carritos o pagos en curso. Available es lo realmente comprable.
-	Stock     int
-	Reserved  int
-	Status    string
+	Stock    int
+	Reserved int
+	Status   string
+	Language string
+	// Game clasifica el producto por juego (magic, pokemon, riftbound). Vacío
+	// significa sin especificar.
+	Game      string
 	Images    []Image
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -92,13 +102,20 @@ type Input struct {
 	Description string
 	PriceCOP    int64
 	Stock       int
+	Language    string
+	Game        string
 }
 
 // Validate normaliza (recorta espacios) y valida el producto.
 func (in Input) Validate() (Input, error) {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Description = strings.TrimSpace(in.Description)
+	in.Game = strings.TrimSpace(in.Game)
+	in.Language = strings.TrimSpace(in.Language)
 
+	if !ValidGame(in.Game) {
+		return in, fmt.Errorf("el juego debe ser %q, %q, %q o vacío", GameMagic, GamePokemon, GameRiftbound)
+	}
 	if in.Title == "" {
 		return in, errors.New("el título es requerido")
 	}
@@ -128,12 +145,32 @@ func ValidStatus(status string) bool {
 	return status == StatusActive || status == StatusHidden
 }
 
+// ValidGame indica si el código de juego es uno de los admitidos. Vacío es
+// válido y significa "sin especificar".
+func ValidGame(game string) bool {
+	switch game {
+	case "", GameMagic, GamePokemon, GameRiftbound:
+		return true
+	default:
+		return false
+	}
+}
+
 // ListFilter acota el listado. IncludeHidden es solo para el panel admin.
 type ListFilter struct {
 	Query         string
 	IncludeHidden bool
-	Limit         int
-	Offset        int
+	Game          string
+	Status        string
+	Language      string
+	// SoldOut filtra por disponibilidad. nil = sin filtro; true = agotados;
+	// false = con stock.
+	SoldOut *bool
+	// Sort ordena el listado: relevance (por defecto), price-asc, price-desc,
+	// name o newest.
+	Sort   string
+	Limit  int
+	Offset int
 }
 
 const (
@@ -144,6 +181,7 @@ const (
 // Normalize aplica los límites de paginación.
 func (f ListFilter) Normalize() ListFilter {
 	f.Query = strings.TrimSpace(f.Query)
+	f.Sort = strings.TrimSpace(f.Sort)
 	if f.Limit <= 0 {
 		f.Limit = DefaultListLimit
 	}

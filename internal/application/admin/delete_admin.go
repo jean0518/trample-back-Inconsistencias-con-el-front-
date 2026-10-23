@@ -16,3 +16,7 @@ func NewDeleteAdminUseCase(staff out.AdminUserRepository) *DeleteAdminUseCase {
 func (uc *DeleteAdminUseCase) Execute(ctx context.Context, id string) error {
 	return uc.staff.Delete(ctx, id)
 }
+
+func (uc *DeleteAdminUseCase) SetStatus(ctx context.Context, id string, status string) error {
+	return uc.staff.SetStatus(ctx, id, status)
+}

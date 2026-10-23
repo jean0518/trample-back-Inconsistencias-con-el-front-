@@ -20,6 +20,9 @@ type AdminUserRepository interface {
 	// UpdateProfile actualiza los datos del staff (nombre, correo, contraseña
 	// opcional), la etiqueta de rol y los paneles asignados.
 	UpdateProfile(ctx context.Context, userID string, user auth.User, role string) error
-	// Delete elimina un usuario de staff (nunca a un admin) junto con su registro en users.
+	// Delete elimina definitivamente a un usuario de staff (nunca a un admin)
+	// junto con sus datos asociados: ventas, reservas, inventario y acceso.
 	Delete(ctx context.Context, userID string) error
+	// SetStatus cambia el estado del staff ("active" | "inactive").
+	SetStatus(ctx context.Context, userID string, status string) error
 }

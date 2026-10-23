@@ -11,26 +11,27 @@ import (
 )
 
 type Handlers struct {
-	Auth           *AuthHandler
-	Games          *GamesHandler
-	Catalog        *CatalogHandler
-	Pokemon        *PokemonHandler
-	Magic          *MagicHandler
-	Riftbound      *RiftboundHandler
-	Listings       *ListingHandler
-	Owners         *OwnerHandler
-	Cart           *CartHandler
-	Sales          *SaleHandler
-	AdminUsers     *AdminUserHandler
-	Dashboard      *DashboardHandler
-	Webhook        *WebhookHandler
-	Payments       *BoldWebhookHandler
-	Inventory      *InventoryHandler
-	CardImages     *CardImageHandler
-	Products       *ProductHandler
-	ProductCart    *ProductCartHandler
-	AuthMiddleware *AuthMiddleware
-	AllowedOrigins []string
+	Auth              *AuthHandler
+	Games             *GamesHandler
+	Catalog           *CatalogHandler
+	Pokemon           *PokemonHandler
+	Magic             *MagicHandler
+	Riftbound         *RiftboundHandler
+	Listings          *ListingHandler
+	Owners            *OwnerHandler
+	Cart              *CartHandler
+	Sales             *SaleHandler
+	AdminUsers        *AdminUserHandler
+	AdminReservations *AdminReservationHandler
+	Dashboard         *DashboardHandler
+	Webhook           *WebhookHandler
+	Payments          *BoldWebhookHandler
+	Inventory         *InventoryHandler
+	CardImages        *CardImageHandler
+	Products          *ProductHandler
+	ProductCart       *ProductCartHandler
+	AuthMiddleware    *AuthMiddleware
+	AllowedOrigins    []string
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
@@ -215,6 +216,8 @@ func NewRouter(h Handlers) http.Handler {
 
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermReservas)).
 			Get("/reservation-logs", h.Cart.ListReservationLogs)
+		r.With(h.AuthMiddleware.RequirePermission(auth.PermReservas)).
+			Delete("/reservations/{kind}/{id}", h.AdminReservations.Release)
 		r.Get("/sales", h.Sales.ListAdminSales)
 		r.Get("/sales/counts", h.Sales.SaleCounts)
 		// Pedidos de recogida en tienda: pagarlos en el local o cancelarlos.
@@ -270,6 +273,7 @@ func NewRouter(h Handlers) http.Handler {
 		r.Use(h.AuthMiddleware.RequireRole(auth.RoleAdmin))
 		r.Get("/", h.Products.ListAdmin)
 		r.Post("/", h.Products.Create)
+		r.Patch("/bulk", h.Products.BulkUpdate)
 		r.Get("/{id}", h.Products.GetAdmin)
 		r.Put("/{id}", h.Products.Update)
 		r.Patch("/{id}/status", h.Products.SetStatus)
@@ -285,6 +289,7 @@ func NewRouter(h Handlers) http.Handler {
 		r.Get("/", h.AdminUsers.List)
 		r.Post("/", h.AdminUsers.Create)
 		r.Patch("/{id}", h.AdminUsers.Update)
+		r.Patch("/{id}/status", h.AdminUsers.SetStatus)
 		r.Delete("/{id}", h.AdminUsers.Delete)
 	})
 

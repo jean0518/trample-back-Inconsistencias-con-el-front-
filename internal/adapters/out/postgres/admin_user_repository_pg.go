@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"trample-back/internal/domain/auth"
 
@@ -60,13 +61,13 @@ func (r *AdminUserRepository) CreateStaff(ctx context.Context, user auth.User, c
 
 func (r *AdminUserRepository) List(ctx context.Context) ([]auth.User, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT u.id, u.first_name, u.last_name, u.email, au.role,
+		`SELECT u.id, u.first_name, u.last_name, u.email, au.role, au.status,
 		        COALESCE(ARRAY_AGG(aup.panel_code ORDER BY aup.panel_code) FILTER (WHERE aup.panel_code IS NOT NULL), '{}')
 		 FROM admin_users au
 		 JOIN users u ON u.id = au.user_id
 		 LEFT JOIN admin_user_panels aup ON aup.admin_user_id = au.id
 		 WHERE au.role <> 'customer'
-		 GROUP BY u.id, u.first_name, u.last_name, u.email, au.role
+		 GROUP BY u.id, u.first_name, u.last_name, u.email, au.role, au.status
 		 ORDER BY u.id ASC`,
 	)
 	if err != nil {
@@ -77,7 +78,7 @@ func (r *AdminUserRepository) List(ctx context.Context) ([]auth.User, error) {
 	var users []auth.User
 	for rows.Next() {
 		var u auth.User
-		if err := rows.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Role, &u.Permissions); err != nil {
+		if err := rows.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Role, &u.Status, &u.Permissions); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -248,14 +249,89 @@ func (r *AdminUserRepository) UpdateProfile(ctx context.Context, userID string, 
 	return tx.Commit(ctx)
 }
 
+// Delete elimina definitivamente a un usuario de staff y todos sus datos
+// asociados. Un administrador no se puede tocar (queda protegido por el rol).
+//
+// Las tablas hijas de users(id) no tienen ON DELETE CASCADE en todos los casos
+// (ventas, reservas, inventario y pagos), así que el borrado se hace en una
+// transacción limpiando primero esos registros. Los productos creados por el
+// usuario se conservan y solo se desvinculan, para no romper el catálogo.
 func (r *AdminUserRepository) Delete(ctx context.Context, userID string) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var role string
+		err := tx.QueryRow(ctx,
+			`SELECT role FROM admin_users WHERE user_id = $1 FOR UPDATE`,
+			userID,
+		).Scan(&role)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrUserNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if role == auth.RoleAdmin {
+			return auth.ErrIsAdmin
+		}
+
+		if err := deleteUserDependents(ctx, tx, userID); err != nil {
+			return err
+		}
+
+		tag, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return auth.ErrUserNotFound
+		}
+		return nil
+	})
+}
+
+// deleteUserDependents limpia en orden los registros que apuntan al usuario.
+// El orden importa: primero los hijos de ventas (sale_product_items no tiene
+// cascade), después las ventas, las reservas y, al final, el staff. Las
+// reservas de cartas y productos se eliminan para que sus logs históricos no
+// queden asociados a una cuenta que ya no existe.
+func deleteUserDependents(ctx context.Context, tx pgx.Tx, userID string) error {
+	steps := []struct {
+		what  string
+		query string
+	}{
+		{"desvincular productos", `UPDATE products SET created_by = NULL WHERE created_by = $1`},
+		{"eliminar pagos en curso", `DELETE FROM payment_checkouts WHERE user_id = $1`},
+		{"eliminar productos vendidos", `DELETE FROM sale_product_items WHERE sale_id IN (SELECT id FROM sales WHERE user_id = $1)`},
+		{"eliminar ítems vendidos", `DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE user_id = $1)`},
+		{"eliminar ventas", `DELETE FROM sales WHERE user_id = $1`},
+		{"eliminar reservas de cartas", `DELETE FROM cart_reservations WHERE user_id = $1`},
+		{"eliminar reservas de productos", `DELETE FROM product_reservations WHERE user_id = $1`},
+		{"eliminar historial de cartas", `DELETE FROM cart_reservation_logs WHERE user_id = $1`},
+		{"eliminar historial de productos", `DELETE FROM product_reservation_logs WHERE user_id = $1`},
+		{"eliminar inventario", `DELETE FROM inventory_listings WHERE seller_id = $1`},
+		{"desvincular staff creado", `UPDATE admin_users SET created_by = NULL WHERE created_by = $1`},
+		{"eliminar paneles del staff", `DELETE FROM admin_user_panels WHERE admin_user_id IN (SELECT id FROM admin_users WHERE user_id = $1)`},
+		{"eliminar staff", `DELETE FROM admin_users WHERE user_id = $1`},
+	}
+	for _, step := range steps {
+		if _, err := tx.Exec(ctx, step.query, userID); err != nil {
+			return fmt.Errorf("%s: %w", step.what, err)
+		}
+	}
+	return nil
+}
+
+// SetStatus cambia el estado del staff ("active" | "inactive"). Nunca afecta a
+// un administrador ni a un usuario que no sea staff.
+func (r *AdminUserRepository) SetStatus(ctx context.Context, userID string, status string) error {
+	if status != auth.StatusActive && status != auth.StatusInactive {
+		return auth.ErrUserNotFound
+	}
 	tag, err := r.db.Exec(ctx,
-		`DELETE FROM users
-		 WHERE id = $1
-		   AND EXISTS (SELECT 1 FROM admin_users au
-		               WHERE au.user_id = users.id
-		                 AND au.role <> 'admin')`,
-		userID,
+		`UPDATE admin_users
+		 SET status = $2, updated_at = now()
+		 WHERE user_id = $1
+		   AND role <> 'admin'`,
+		userID, status,
 	)
 	if err != nil {
 		return err

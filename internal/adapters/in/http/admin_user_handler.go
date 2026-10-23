@@ -9,11 +9,11 @@ import (
 )
 
 type AdminUserHandler struct {
-	create       *appAdmin.CreateAdminUseCase
-	list         *appAdmin.ListAdminsUseCase
-	updateUser   *appAdmin.UpdateAdminUserUseCase
-	delete       *appAdmin.DeleteAdminUseCase
-	panels       *appAdmin.PanelsListUseCase
+	create     *appAdmin.CreateAdminUseCase
+	list       *appAdmin.ListAdminsUseCase
+	updateUser *appAdmin.UpdateAdminUserUseCase
+	delete     *appAdmin.DeleteAdminUseCase
+	panels     *appAdmin.PanelsListUseCase
 }
 
 func NewAdminUserHandler(
@@ -33,12 +33,17 @@ type adminUserResponse struct {
 	Email       string   `json:"email"`
 	Role        string   `json:"role"`
 	Permissions []string `json:"permissions"`
+	Status      string   `json:"status"`
 }
 
 func newAdminUserResponse(u auth.User) adminUserResponse {
 	perms := u.Permissions
 	if perms == nil {
 		perms = []string{}
+	}
+	status := u.Status
+	if status == "" {
+		status = auth.StatusActive
 	}
 	return adminUserResponse{
 		ID:          u.ID,
@@ -47,6 +52,7 @@ func newAdminUserResponse(u auth.User) adminUserResponse {
 		Email:       u.Email,
 		Role:        u.Role,
 		Permissions: perms,
+		Status:      status,
 	}
 }
 
@@ -167,6 +173,37 @@ func (h *AdminUserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.delete.Execute(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
+			Error(w, http.StatusNotFound, "usuario no encontrado")
+		case errors.Is(err, auth.ErrIsAdmin):
+			Error(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			Error(w, http.StatusInternalServerError, "error interno del servidor")
+		}
+		return
+	}
+	JSON(w, http.StatusOK, map[string]string{"deleted": id})
+}
+
+func (h *AdminUserHandler) SetStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body JSON inválido")
+		return
+	}
+	if body.Status != auth.StatusActive && body.Status != auth.StatusInactive {
+		Error(w, http.StatusBadRequest, "estado inválido")
+		return
+	}
+	if err := h.delete.SetStatus(r.Context(), id, body.Status); err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
 			Error(w, http.StatusNotFound, "usuario no encontrado")
 			return
@@ -174,7 +211,7 @@ func (h *AdminUserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "error interno del servidor")
 		return
 	}
-	JSON(w, http.StatusOK, map[string]string{"deleted": id})
+	JSON(w, http.StatusOK, map[string]string{"updated": id})
 }
 
 type panelResponse struct {

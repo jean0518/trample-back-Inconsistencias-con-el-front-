@@ -136,6 +136,7 @@ func main() {
 	panelsListUC := appAdmin.NewPanelsListUseCase(panelRepo)
 	deleteAdminUC := appAdmin.NewDeleteAdminUseCase(adminUserRepo)
 	cartUC := appReservation.NewCartUseCase(reservationRepo)
+	adminReservationsUC := appReservation.NewAdminUseCase(reservationRepo, productReservationRepo)
 	// El pago en línea no registra el pedido: deja listo el checkout con la
 	// referencia de la pasarela. El pedido se crea al aprobarse el pago.
 	createCheckoutUC := appSale.NewCreateCheckoutUseCase(reservationRepo, saleRepo, boldClient, cfg.BoldPaymentHoldMinutes, cfg.FrontendURL).
@@ -176,28 +177,29 @@ func main() {
 
 	// Router
 	secureCookie := cfg.Env == "production"
-	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret))
+	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret)).WithUserRepository(userRepo)
 	router := httpadapter.NewRouter(httpadapter.Handlers{
-		Auth:           httpadapter.NewAuthHandler(registerUC, loginUC, verifyEmailUC, secureCookie),
-		Games:          httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
-		Catalog:        httpadapter.NewCatalogHandler(listCardsUC),
-		Pokemon:        httpadapter.NewPokemonHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
-		Magic:          httpadapter.NewMagicHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
-		Riftbound:      httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
-		Webhook:        httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
-		Payments:       httpadapter.NewBoldWebhookHandler(processPaymentEventUC, cfg.BoldSecretKey, cfg.BoldEnv != "production"),
-		Listings:       httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
-		Owners:         httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
-		AdminUsers:     httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
-		Cart:           httpadapter.NewCartHandler(cartUC),
-		Sales:          httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC, fulfillmentUC),
-		Dashboard:      httpadapter.NewDashboardHandler(dashboardSummaryUC, salesBreakdownUC),
-		Inventory:      httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
-		CardImages:     httpadapter.NewCardImageHandler(cardImageRepo),
-		Products:       httpadapter.NewProductHandler(manageProductsUC, queryProductsUC, productRepo),
-		ProductCart:    httpadapter.NewProductCartHandler(productCartUC),
-		AuthMiddleware: authMiddleware,
-		AllowedOrigins: cfg.AllowedOrigins,
+		Auth:              httpadapter.NewAuthHandler(registerUC, loginUC, verifyEmailUC, secureCookie),
+		Games:             httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
+		Catalog:           httpadapter.NewCatalogHandler(listCardsUC),
+		Pokemon:           httpadapter.NewPokemonHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
+		Magic:             httpadapter.NewMagicHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
+		Riftbound:         httpadapter.NewRiftboundHandler(searchUC, syncExpansionsUC),
+		Webhook:           httpadapter.NewWebhookHandler(processWebhookUC, cfg.ScrydexWebhookSecret),
+		Payments:          httpadapter.NewBoldWebhookHandler(processPaymentEventUC, cfg.BoldSecretKey, cfg.BoldEnv != "production"),
+		Listings:          httpadapter.NewListingHandler(createListingUC, listListingsUC, updateStockUC, editListingUC, deleteListingUC),
+		Owners:            httpadapter.NewOwnerHandler(createOwnerUC, updateOwnerUC, listOwnersUC, deleteOwnerUC),
+		AdminUsers:        httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
+		AdminReservations: httpadapter.NewAdminReservationHandler(adminReservationsUC),
+		Cart:              httpadapter.NewCartHandler(cartUC),
+		Sales:             httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC, fulfillmentUC),
+		Dashboard:         httpadapter.NewDashboardHandler(dashboardSummaryUC, salesBreakdownUC),
+		Inventory:         httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
+		CardImages:        httpadapter.NewCardImageHandler(cardImageRepo),
+		Products:          httpadapter.NewProductHandler(manageProductsUC, queryProductsUC, productRepo),
+		ProductCart:       httpadapter.NewProductCartHandler(productCartUC),
+		AuthMiddleware:    authMiddleware,
+		AllowedOrigins:    cfg.AllowedOrigins,
 	})
 
 	srv := &http.Server{

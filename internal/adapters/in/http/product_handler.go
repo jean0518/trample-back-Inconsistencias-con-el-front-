@@ -48,6 +48,8 @@ type productResponse struct {
 	Available int                    `json:"available"`
 	SoldOut   bool                   `json:"sold_out"`
 	Status    string                 `json:"status"`
+	Language  string                 `json:"language,omitempty"`
+	Game      string                 `json:"game,omitempty"`
 	Images    []productImageResponse `json:"images"`
 	CreatedAt time.Time              `json:"created_at"`
 	UpdatedAt time.Time              `json:"updated_at"`
@@ -61,7 +63,7 @@ func toProductResponse(p product.Product, admin bool) productResponse {
 	resp := productResponse{
 		ID: p.ID, Title: p.Title, Description: p.Description, PriceCOP: p.PriceCOP,
 		Available: p.Available(), SoldOut: p.SoldOut(),
-		Status: p.Status, Images: imgs, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		Status: p.Status, Language: p.Language, Game: p.Game, Images: imgs, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 	if admin {
 		resp.Stock, resp.Reserved = &p.Stock, &p.Reserved
@@ -100,7 +102,7 @@ func writeProductError(w http.ResponseWriter, err error) {
 func isProductValidation(err error) bool {
 	msg := err.Error()
 	for _, prefix := range []string{
-		"el título", "la descripción", "el precio", "el stock", "estado inválido",
+		"el título", "la descripción", "el precio", "el stock", "el juego", "estado inválido", "selecciona",
 		"la URL de la imagen", "la imagen", "el archivo", "formato no soportado",
 		"no se pudo identificar",
 	} {
@@ -120,7 +122,27 @@ func listFilterFromQuery(r *http.Request) product.ListFilter {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	return product.ListFilter{Query: q.Get("q"), Limit: limit, Offset: offset}
+	var soldOut *bool
+	if raw := q.Get("sold_out"); raw == "true" || raw == "false" {
+		v := raw == "true"
+		soldOut = &v
+	}
+	sort := q.Get("sort")
+	switch sort {
+	case "relevance", "price-asc", "price-desc", "name", "newest":
+	default:
+		sort = ""
+	}
+	return product.ListFilter{
+		Query:    q.Get("q"),
+		Game:     q.Get("game"),
+		Status:   q.Get("status"),
+		Language: q.Get("language"),
+		SoldOut:  soldOut,
+		Sort:     sort,
+		Limit:    limit,
+		Offset:   offset,
+	}
 }
 
 func (h *ProductHandler) list(w http.ResponseWriter, r *http.Request, admin bool) {
@@ -183,6 +205,8 @@ type productBody struct {
 	PriceCOP    int64    `json:"price_cop"`
 	Stock       int      `json:"stock"`
 	Status      string   `json:"status"`
+	Language    string   `json:"language"`
+	Game        string   `json:"game"`
 	ImageURLs   []string `json:"image_urls"`
 }
 
@@ -208,7 +232,7 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	p, err := h.manage.Create(r.Context(), user.ID, appProduct.CreateInput{
 		Title: body.Title, Description: body.Description, PriceCOP: body.PriceCOP,
-		Stock: body.Stock, Status: body.Status, ImageURLs: body.ImageURLs, Uploads: uploads,
+		Stock: body.Stock, Status: body.Status, Language: body.Language, Game: body.Game, ImageURLs: body.ImageURLs, Uploads: uploads,
 	})
 	if errors.Is(err, product.ErrImageAttachment) {
 		JSON(w, http.StatusUnprocessableEntity, map[string]any{
@@ -239,7 +263,7 @@ func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.manage.Update(r.Context(), id, product.Input{
-		Title: body.Title, Description: body.Description, PriceCOP: body.PriceCOP, Stock: body.Stock,
+		Title: body.Title, Description: body.Description, PriceCOP: body.PriceCOP, Stock: body.Stock, Language: body.Language, Game: body.Game,
 	})
 	if err != nil {
 		writeProductError(w, err)
@@ -270,6 +294,30 @@ func (h *ProductHandler) SetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, toProductResponse(p, true))
+}
+
+type bulkProductBody struct {
+	IDs    []int64 `json:"ids"`
+	Status *string `json:"status"`
+	Game   *string `json:"game"`
+}
+
+// BulkUpdate oculta, publica o cambia el juego de varios productos a la vez.
+// Los campos omitidos no se modifican; game vacío quita la clasificación.
+//
+//	@Router /admin/products/bulk [patch]
+func (h *ProductHandler) BulkUpdate(w http.ResponseWriter, r *http.Request) {
+	var body bulkProductBody
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "el cuerpo de la petición no es JSON válido")
+		return
+	}
+	updated, err := h.manage.BulkUpdate(r.Context(), body.IDs, body.Status, body.Game)
+	if err != nil {
+		writeProductError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, map[string]int{"updated": updated})
 }
 
 // Delete borra un producto sin ventas.
@@ -418,6 +466,8 @@ func decodeProductForm(w http.ResponseWriter, r *http.Request) (productBody, []c
 		Title:       strings.TrimSpace(r.FormValue("title")),
 		Description: strings.TrimSpace(r.FormValue("description")),
 		Status:      strings.TrimSpace(r.FormValue("status")),
+		Language:    strings.TrimSpace(r.FormValue("language")),
+		Game:        strings.TrimSpace(r.FormValue("game")),
 	}
 	if raw := strings.TrimSpace(r.FormValue("price_cop")); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)

@@ -44,6 +44,12 @@ func (uc *LoginUseCase) Execute(ctx context.Context, in LoginInput) (LoginResult
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
+	// El staff desactivado no puede iniciar sesión. Se responde como
+	// credenciales inválidas para no revelar el estado de la cuenta.
+	if !user.IsActive() {
+		return LoginResult{}, ErrInvalidCredentials
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(in.Password)); err != nil {
 		return LoginResult{}, ErrInvalidCredentials
 	}

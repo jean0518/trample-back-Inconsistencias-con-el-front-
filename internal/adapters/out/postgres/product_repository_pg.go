@@ -33,14 +33,14 @@ func NewProductRepositoryPG(db *pgxpool.Pool, storage out.ImageStorage) *Product
 // reservas activas. El reservado se calcula aquí y no se guarda: cambia con cada
 // carrito y guardarlo obligaría a mantener dos fuentes de verdad.
 const productColumns = `
-	p.id, p.title, p.description, p.price_cop, p.stock, p.status,
+	p.id, p.title, p.description, p.price_cop, p.stock, p.status, COALESCE(p.language, ''), COALESCE(p.game, ''),
 	COALESCE((SELECT sum(pr.quantity) FROM product_reservations pr
 	          WHERE pr.product_id = p.id AND pr.status = 'active'), 0)::int AS reserved,
 	p.created_at, p.updated_at`
 
 func scanProduct(row pgx.Row) (product.Product, error) {
 	var p product.Product
-	err := row.Scan(&p.ID, &p.Title, &p.Description, &p.PriceCOP, &p.Stock, &p.Status,
+	err := row.Scan(&p.ID, &p.Title, &p.Description, &p.PriceCOP, &p.Stock, &p.Status, &p.Language, &p.Game,
 		&p.Reserved, &p.CreatedAt, &p.UpdatedAt)
 	return p, err
 }
@@ -49,10 +49,10 @@ func scanProduct(row pgx.Row) (product.Product, error) {
 func (r *ProductRepositoryPG) Create(ctx context.Context, createdBy string, in product.Input, status string) (product.Product, error) {
 	var id int64
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO products (title, description, price_cop, stock, status, created_by)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid)
+		INSERT INTO products (title, description, price_cop, stock, status, language, game, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid)
 		RETURNING id`,
-		in.Title, in.Description, in.PriceCOP, in.Stock, status, createdBy).Scan(&id)
+		in.Title, in.Description, in.PriceCOP, in.Stock, status, in.Language, in.Game, createdBy).Scan(&id)
 	if err != nil {
 		return product.Product{}, fmt.Errorf("crear producto: %w", err)
 	}
@@ -73,9 +73,9 @@ func (r *ProductRepositoryPG) Update(ctx context.Context, id int64, in product.I
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE products
-			   SET title = $2, description = $3, price_cop = $4, stock = $5, updated_at = now()
+			   SET title = $2, description = $3, price_cop = $4, stock = $5, language = $6, game = $7, updated_at = now()
 			 WHERE id = $1`,
-			id, in.Title, in.Description, in.PriceCOP, in.Stock); err != nil {
+			id, in.Title, in.Description, in.PriceCOP, in.Stock, in.Language, in.Game); err != nil {
 			return fmt.Errorf("actualizar producto: %w", err)
 		}
 		if in.PriceCOP != oldPrice {
@@ -87,6 +87,50 @@ func (r *ProductRepositoryPG) Update(ctx context.Context, id int64, in product.I
 		return product.Product{}, err
 	}
 	return r.GetByID(ctx, id)
+}
+
+// BulkUpdate aplica estado y/o juego a varios productos en una sola
+// transacción. Los punteros distinguen "no cambiar" (nil) de un valor nuevo.
+// Ocultar cierra los pagos abiertos que contenían esos productos.
+func (r *ProductRepositoryPG) BulkUpdate(ctx context.Context, ids []int64, status, game *string) (int, error) {
+	var updated int
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		sets := make([]string, 0, 3)
+		args := []any{ids}
+		if status != nil {
+			args = append(args, *status)
+			sets = append(sets, fmt.Sprintf("status = $%d", len(args)))
+		}
+		if game != nil {
+			args = append(args, *game)
+			sets = append(sets, fmt.Sprintf("game = $%d", len(args)))
+		}
+		if len(sets) == 0 {
+			return nil
+		}
+		sets = append(sets, "updated_at = now()")
+		tag, err := tx.Exec(ctx,
+			`UPDATE products SET `+strings.Join(sets, ", ")+` WHERE id = ANY($1)`,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("actualizar productos en bloque: %w", err)
+		}
+		updated = int(tag.RowsAffected())
+		if status == nil || *status == product.StatusActive {
+			return nil
+		}
+		for _, id := range ids {
+			if err := closeCheckoutsOfProductTx(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
 }
 
 // SetStatus oculta o publica el producto. Ocultarlo cierra los pagos abiertos
@@ -180,7 +224,38 @@ func (r *ProductRepositoryPG) List(ctx context.Context, f product.ListFilter) ([
 		args = append(args, "%"+escapeLike(f.Query)+"%")
 		where = append(where, fmt.Sprintf("p.title ILIKE $%d", len(args)))
 	}
+	if f.Game != "" {
+		args = append(args, f.Game)
+		where = append(where, fmt.Sprintf("p.game = $%d", len(args)))
+	}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		where = append(where, fmt.Sprintf("p.status = $%d", len(args)))
+	}
+	if f.Language != "" {
+		args = append(args, f.Language)
+		where = append(where, fmt.Sprintf("p.language = $%d", len(args)))
+	}
+	if f.SoldOut != nil {
+		const reserved = `COALESCE((SELECT sum(pr.quantity) FROM product_reservations pr
+		                          WHERE pr.product_id = p.id AND pr.status = 'active'), 0)`
+		if *f.SoldOut {
+			where = append(where, "p.stock <= "+reserved)
+		} else {
+			where = append(where, "p.stock > "+reserved)
+		}
+	}
 	cond := strings.Join(where, " AND ")
+
+	order := "p.created_at DESC, p.id DESC"
+	switch f.Sort {
+	case "price-asc":
+		order = "p.price_cop ASC, p.id DESC"
+	case "price-desc":
+		order = "p.price_cop DESC, p.id DESC"
+	case "name":
+		order = "p.title ASC, p.id ASC"
+	}
 
 	var total int
 	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM products p WHERE `+cond, args...).Scan(&total); err != nil {
@@ -189,8 +264,8 @@ func (r *ProductRepositoryPG) List(ctx context.Context, f product.ListFilter) ([
 
 	args = append(args, f.Limit, f.Offset)
 	rows, err := r.db.Query(ctx, fmt.Sprintf(
-		`SELECT %s FROM products p WHERE %s ORDER BY p.created_at DESC, p.id DESC LIMIT $%d OFFSET $%d`,
-		productColumns, cond, len(args)-1, len(args)), args...)
+		`SELECT %s FROM products p WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		productColumns, cond, order, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listar productos: %w", err)
 	}

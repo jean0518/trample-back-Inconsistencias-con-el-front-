@@ -25,7 +25,7 @@ func newFakeRepo() *fakeRepo {
 
 func (f *fakeRepo) Create(_ context.Context, _ string, in product.Input, status string) (product.Product, error) {
 	f.nextID++
-	p := &product.Product{ID: f.nextID, Title: in.Title, Description: in.Description, PriceCOP: in.PriceCOP, Stock: in.Stock, Status: status}
+	p := &product.Product{ID: f.nextID, Title: in.Title, Description: in.Description, PriceCOP: in.PriceCOP, Stock: in.Stock, Status: status, Language: in.Language, Game: in.Game}
 	f.products[p.ID] = p
 	return *p, nil
 }
@@ -35,6 +35,7 @@ func (f *fakeRepo) Update(_ context.Context, id int64, in product.Input) (produc
 		return product.Product{}, product.ErrNotFound
 	}
 	p.Title, p.Description, p.PriceCOP, p.Stock = in.Title, in.Description, in.PriceCOP, in.Stock
+	p.Language, p.Game = in.Language, in.Game
 	return *p, nil
 }
 func (f *fakeRepo) SetStatus(_ context.Context, id int64, status string) (product.Product, error) {
@@ -44,6 +45,23 @@ func (f *fakeRepo) SetStatus(_ context.Context, id int64, status string) (produc
 	}
 	p.Status = status
 	return *p, nil
+}
+func (f *fakeRepo) BulkUpdate(_ context.Context, ids []int64, status, game *string) (int, error) {
+	updated := 0
+	for _, id := range ids {
+		p, ok := f.products[id]
+		if !ok {
+			continue
+		}
+		if status != nil {
+			p.Status = *status
+		}
+		if game != nil {
+			p.Game = *game
+		}
+		updated++
+	}
+	return updated, nil
 }
 func (f *fakeRepo) Delete(_ context.Context, id int64) error {
 	if f.sold[id] {
@@ -215,6 +233,34 @@ func TestDeleteWithSalesIsRejected(t *testing.T) {
 	repo.sold[p.ID] = true
 	if err := uc.Delete(context.Background(), p.ID); !errors.Is(err, product.ErrHasSales) {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestBulkUpdateStatusAndGame(t *testing.T) {
+	repo := newFakeRepo()
+	uc := NewManageUseCase(repo)
+	ctx := context.Background()
+	a, _ := uc.Create(ctx, "admin-1", validCreate())
+	b, _ := uc.Create(ctx, "admin-1", validCreate())
+
+	status, game := product.StatusHidden, product.GamePokemon
+	updated, err := uc.BulkUpdate(ctx, []int64{a.ID, b.ID}, &status, &game)
+	if err != nil || updated != 2 {
+		t.Fatalf("bulk: %d %v", updated, err)
+	}
+	for _, id := range []int64{a.ID, b.ID} {
+		p, _ := repo.GetByID(ctx, id)
+		if p.Status != product.StatusHidden || p.Game != product.GamePokemon {
+			t.Errorf("producto %d quedó %+v", id, p)
+		}
+	}
+
+	if _, err := uc.BulkUpdate(ctx, nil, nil, nil); err == nil {
+		t.Error("sin ids debía fallar")
+	}
+	bad := "otro"
+	if _, err := uc.BulkUpdate(ctx, []int64{a.ID}, nil, &bad); err == nil {
+		t.Error("juego inválido debía fallar")
 	}
 }
 

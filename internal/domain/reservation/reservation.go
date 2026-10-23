@@ -9,6 +9,9 @@ var ErrNotFound = errors.New("reserva no encontrada")
 var ErrInsufficientStock = errors.New("stock insuficiente para reservar")
 var ErrInvalidListing = errors.New("no hay listing activo disponible para esa carta e idioma")
 
+// ErrInvalidKind: el tipo de reserva no es card ni product.
+var ErrInvalidKind = errors.New("tipo de reserva inválido")
+
 // ErrInvalidQuantity: la cantidad de una línea del carrito debe ser ≥ 1 (para
 // quitarla está Remove).
 var ErrInvalidQuantity = errors.New("la cantidad debe ser al menos 1")

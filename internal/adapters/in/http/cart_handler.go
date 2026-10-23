@@ -277,7 +277,7 @@ func (h *CartHandler) ListReservationLogs(w http.ResponseWriter, r *http.Request
 		Limit:  limit, Offset: offset,
 	})
 	if errors.Is(err, reservation.ErrInvalidLogFilter) {
-		Error(w, http.StatusBadRequest, "status admite reserved|returned|sold y kind admite card|product")
+		Error(w, http.StatusBadRequest, "status admite reserved|reservada|returned|sold y kind admite card|product")
 		return
 	}
 	if err != nil {

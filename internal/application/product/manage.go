@@ -7,22 +7,47 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"trample-back/internal/domain/catalog"
 	"trample-back/internal/domain/product"
 	"trample-back/internal/ports/out"
 )
 
+// GameLookup comprueba que un código de juego exista. GameRepository lo
+// implementa; en pruebas basta un fake pequeño.
+type GameLookup interface {
+	GetByCode(ctx context.Context, code string) (catalog.Game, error)
+}
+
 // ManageUseCase es la administración de productos que hace el admin desde el
 // panel: alta, edición, ocultar/publicar, borrar y gestionar las fotos.
 type ManageUseCase struct {
-	repo out.ProductRepository
+	repo  out.ProductRepository
+	games GameLookup
 }
 
-// NewManageUseCase construye el caso de uso.
+// NewManageUseCase construye el caso de uso. Sin WithGames no se comprueba la
+// existencia del juego (útil en pruebas y en usos sin catálogo).
 func NewManageUseCase(repo out.ProductRepository) *ManageUseCase {
 	return &ManageUseCase{repo: repo}
+}
+
+// WithGames conecta la tabla de juegos para rechazar códigos inexistentes.
+func (uc *ManageUseCase) WithGames(games GameLookup) *ManageUseCase {
+	uc.games = games
+	return uc
+}
+
+// validateGame comprueba que el juego exista cuando está configurado el
+// catálogo. Así un juego recién creado desde Productos ya se puede asignar.
+func (uc *ManageUseCase) validateGame(ctx context.Context, game string) error {
+	if game == "" || uc.games == nil {
+		return nil
+	}
+	if _, err := uc.games.GetByCode(ctx, game); err != nil {
+		return fmt.Errorf("el juego %q no existe: créalo primero en Juegos", game)
+	}
+	return nil
 }
 
 // CreateInput es el alta tal como llega del formulario, antes de validarse.
@@ -62,6 +87,9 @@ func (uc *ManageUseCase) Create(ctx context.Context, adminID string, in CreateIn
 		Game:        in.Game,
 	}.Validate()
 	if err != nil {
+		return product.Product{}, err
+	}
+	if err := uc.validateGame(ctx, valid.Game); err != nil {
 		return product.Product{}, err
 	}
 
@@ -114,6 +142,9 @@ func (uc *ManageUseCase) Update(ctx context.Context, id int64, in product.Input)
 	if err != nil {
 		return product.Product{}, err
 	}
+	if err := uc.validateGame(ctx, valid.Game); err != nil {
+		return product.Product{}, err
+	}
 	return uc.repo.Update(ctx, id, valid)
 }
 
@@ -132,9 +163,12 @@ func (uc *ManageUseCase) BulkUpdate(ctx context.Context, ids []int64, status, ga
 		}
 	}
 	if game != nil {
-		normalized := strings.TrimSpace(*game)
+		normalized := product.NormalizeGameCode(*game)
 		if !product.ValidGame(normalized) {
-			return 0, fmt.Errorf("el juego debe ser %q, %q, %q o vacío", product.GameMagic, product.GamePokemon, product.GameRiftbound)
+			return 0, fmt.Errorf("el código de juego no es válido")
+		}
+		if err := uc.validateGame(ctx, normalized); err != nil {
+			return 0, err
 		}
 		game = &normalized
 	}

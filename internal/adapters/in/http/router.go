@@ -205,6 +205,20 @@ func NewRouter(h Handlers) http.Handler {
 		// Botón "+" del selector de expansión del formulario de alta manual.
 		r.With(h.AuthMiddleware.RequirePermission(auth.PermInventario)).
 			Post("/expansions", h.Inventory.CreateExpansion)
+		// Juegos - panel propio. Inventario se mantiene por compatibilidad con
+		// cuentas que ya gestionaban juegos desde allí.
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Get("/games", h.Games.ListAdmin)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Post("/games", h.Games.Create)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Put("/games/{id}", h.Games.Update)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Delete("/games/{id}", h.Games.Delete)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Post("/games/{id}/icon", h.Games.UploadIcon)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermJuegos, auth.PermInventario)).
+			Post("/games/{id}/logo", h.Games.UploadLogo)
 
 		r.Route("/owners", func(r chi.Router) {
 			r.Use(h.AuthMiddleware.RequirePermission(auth.PermPropietarios))
@@ -225,6 +239,18 @@ func NewRouter(h Handlers) http.Handler {
 			Post("/sales/{id}/mark-paid", h.Sales.MarkPickupPaid)
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
 			Post("/sales/{id}/cancel", h.Sales.CancelPickup)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Put("/sales/{id}", h.Sales.UpdateOrder)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/extend", h.Sales.ExtendPickup)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/sales/{id}/credit", h.Sales.CreateStoreCredit)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Get("/credits", h.Sales.ListCredits)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Get("/credits/{id}", h.Sales.GetCredit)
+		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
+			Post("/credits/{id}/payments", h.Sales.AddCreditPayment)
 		// Cancelación solicitada por el cliente: aprobarla es /cancel.
 		r.With(h.AuthMiddleware.RequireAnyPermission(auth.PermVentas, auth.PermPedidos)).
 			Post("/sales/{id}/reject-cancel", h.Sales.RejectPickupCancel)

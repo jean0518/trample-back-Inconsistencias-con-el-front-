@@ -528,7 +528,7 @@ func (r *CardRepository) ListCards(ctx context.Context, p out.ListCardsParams) (
 			ORDER BY il.id ASC
 			LIMIT 1
 		) il_owner ON true
-		WHERE ($1::text   = '' OR g.code          = $1)
+		WHERE ($1::text   = '' OR LOWER(g.code) = LOWER(TRIM($1)))
 		  AND ($2::bigint = 0  OR c.expansion_id  = $2)
 		  AND ($3::text   = '' OR c.name ILIKE '%%' || $3 || '%%')
 		  AND ($6::text   = '' OR c.rarity      = $6)

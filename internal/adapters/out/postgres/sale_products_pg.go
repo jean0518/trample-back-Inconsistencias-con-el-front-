@@ -69,9 +69,9 @@ func insertProductItemsTx(ctx context.Context, tx pgx.Tx, saleID int64, items []
 		err := tx.QueryRow(ctx, `
 			INSERT INTO sale_product_items (sale_id, product_id, title, quantity, price_cop)
 			VALUES ($1, (SELECT id FROM products WHERE id = $2), $3, $4, $5)
-			RETURNING product_id, title, quantity, price_cop`,
+			RETURNING id, product_id, title, quantity, price_cop`,
 			saleID, it.ProductID, it.Title, it.Quantity, it.PriceCOP).
-			Scan(&saved.ProductID, &saved.Title, &saved.Quantity, &saved.PriceCOP)
+			Scan(&saved.ID, &saved.ProductID, &saved.Title, &saved.Quantity, &saved.PriceCOP)
 		if err != nil {
 			return nil, fmt.Errorf("crear item de producto de la venta: %w", err)
 		}
@@ -117,7 +117,7 @@ func restoreProductStockTx(ctx context.Context, tx pgx.Tx, saleID int64) error {
 // loadProductItems carga las líneas de producto de una venta.
 func (r *SaleRepository) loadProductItems(ctx context.Context, s *sale.Sale) error {
 	rows, err := r.db.Query(ctx, `
-		SELECT product_id, title, quantity, price_cop
+		SELECT id, product_id, title, quantity, price_cop
 		  FROM sale_product_items WHERE sale_id = $1 ORDER BY id`, s.ID)
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (r *SaleRepository) loadProductItems(ctx context.Context, s *sale.Sale) err
 	var items []sale.ProductItem
 	for rows.Next() {
 		var it sale.ProductItem
-		if err := rows.Scan(&it.ProductID, &it.Title, &it.Quantity, &it.PriceCOP); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProductID, &it.Title, &it.Quantity, &it.PriceCOP); err != nil {
 			return err
 		}
 		items = append(items, it)
@@ -140,7 +140,7 @@ func (r *SaleRepository) loadProductItems(ctx context.Context, s *sale.Sale) err
 // usuario o ninguna: si alguna ya no está activa devuelve product.ErrNotFound. Es
 // la versión para efectivo/transferencia y recogida, donde todavía no se cobró
 // nada y es mejor fallar que vender algo ya no apartado.
-func confirmProductReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, ids []int64) error {
+func confirmProductReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, ids []int64, logStatus string) error {
 	if err := lockProductsOfReservationsTx(ctx, tx, ids); err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func confirmProductReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID s
 	if int(tag.RowsAffected()) != len(ids) {
 		return product.ErrNotFound
 	}
-	return logProductReservationsTx(ctx, tx, ids, nil, reservation.LogSold, "")
+	return logProductReservationsTx(ctx, tx, ids, nil, logStatus, "")
 }
 
 // confirmProductReservationsTx confirma las reservas que sostenían un pago ya
@@ -236,6 +236,27 @@ func logProductReservationsTx(ctx context.Context, tx pgx.Tx, ids []int64, quant
 		LEFT JOIN users u ON u.id = pr.user_id
 		WHERE pr.id = ANY($1)`, ids, quantity, status, reason); err != nil {
 		return fmt.Errorf("registrar historial de reservas de productos: %w", err)
+	}
+	return nil
+}
+
+// logSaleProductReservationsTx registra un evento para las reservas de producto
+// que sostienen un pedido: 'sold' al cobrar y 'returned' al cancelar.
+func logSaleProductReservationsTx(ctx context.Context, tx pgx.Tx, saleID int64, status, reason string) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO product_reservation_logs
+			(reservation_id, user_id, customer_name, customer_email,
+			 product_id, title, quantity, price_cop, status, return_reason)
+		SELECT pr.id, pr.user_id,
+		       TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), COALESCE(u.email, ''),
+		       p.id, p.title, pr.quantity, p.price_cop, $2, NULLIF($3, '')
+		FROM sales s
+		JOIN product_reservations pr ON pr.id = ANY(s.product_reservation_ids)
+		JOIN products p ON p.id = pr.product_id
+		LEFT JOIN users u ON u.id = pr.user_id
+		WHERE s.id = $1
+	`, saleID, status, reason); err != nil {
+		return fmt.Errorf("registrar historial de productos del pedido %d: %w", saleID, err)
 	}
 	return nil
 }

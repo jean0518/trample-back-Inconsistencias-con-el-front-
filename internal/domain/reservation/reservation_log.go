@@ -12,7 +12,8 @@ var ErrInvalidLogFilter = errors.New("filtro del historial de reservas inválido
 const (
 	// LogReserved: el cliente agregó la carta al carrito (reserva activa).
 	LogReserved = "reserved"
-	// LogReservada: reserva directa/confirmada por el administrador.
+	// LogReservada: el pedido de recogida ya está apartado, pero aún no se ha
+	// pagado. El stock sigue retenido; el evento pasa a 'sold' al cobrar.
 	LogReservada = "reservada"
 	// LogReturned: la reserva se devolvió al stock (la eliminó o expiró).
 	LogReturned = "returned"
@@ -28,6 +29,10 @@ const (
 	ReturnExpired = "expired"
 	// ReturnPaymentFailed: la pasarela rechazó o anuló el pago.
 	ReturnPaymentFailed = "payment_failed"
+	// ReturnCancelled: el staff canceló la recogida pendiente.
+	ReturnCancelled = "cancelled"
+	// ReturnPickupExpired: venció el plazo para pagar y recoger.
+	ReturnPickupExpired = "pickup_expired"
 )
 
 // Tipos de reserva en el historial.

@@ -20,4 +20,5 @@ type ImageStorage interface {
 	// PutProductImage sube una foto de producto. Va en su propio método para que
 	// las fotos del módulo de productos no compartan carpeta con las de cartas.
 	PutProductImage(ctx context.Context, productID int64, upload catalog.ImageUpload) (string, error)
+	PutGameImage(ctx context.Context, gameID int64, kind string, upload catalog.ImageUpload) (string, error)
 }

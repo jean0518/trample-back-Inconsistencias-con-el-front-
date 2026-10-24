@@ -49,7 +49,11 @@ const userSelect = `
 	       CASE WHEN au.id IS NOT NULL THEN au.status ELSE '' END,
 	       u.email_verified,
 	       COALESCE(u.email_verify_token, ''),
-	       COALESCE(u.email_verify_expires_at, '0001-01-01'::timestamptz)
+	       COALESCE(u.email_verify_expires_at, '0001-01-01'::timestamptz),
+	       (
+	         CASE WHEN au.id IS NOT NULL THEN au.role ELSE u.role END
+	       ) = 'admin'
+	       AND (au.id IS NULL OR au.created_by IS NULL)
 	FROM users u
 	LEFT JOIN admin_users au ON au.user_id = u.id
 `
@@ -58,7 +62,7 @@ func (r *UserRepository) findOne(ctx context.Context, where string, arg any) (au
 	var u auth.User
 	err := r.db.QueryRow(ctx, userSelect+where, arg).Scan(
 		&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.Permissions, &u.Status,
-		&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyExpiresAt,
+		&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyExpiresAt, &u.IsDirectAdmin,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return auth.User{}, auth.ErrUserNotFound

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -34,12 +35,35 @@ const (
 	StatusActive = "active"
 	StatusHidden = "hidden"
 
-	// Juegos admitidos para clasificar productos sellados. El front usa estos
-	// mismos códigos (GameId) para filtrar y editar en bloque.
-	GameMagic     = "magic"
+	// Códigos base de los juegos conocidos. La lista de juegos vive en la tabla
+	// `games` y el admin puede crear más: estas constantes solo documentan los
+	// históricos y se usan en pruebas.
+	GameMagic     = "mtg"
 	GamePokemon   = "pokemon"
 	GameRiftbound = "riftbound"
+
+	// maxGameCodeLength acota el código que se guarda en products.game.
+	maxGameCodeLength = 32
 )
+
+// gameCodePattern admite los códigos nuevos (minúsculas, números, guion y
+// guion bajo). La existencia real se valida contra la tabla games en el caso de
+// uso de administración.
+var gameCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+var legacyGameAliases = map[string]string{
+	"magic": GameMagic,
+}
+
+// NormalizeGameCode deja el código en la forma que usan el catálogo y los
+// filtros (minúsculas) y traduce alias históricos como "magic" a "mtg".
+func NormalizeGameCode(game string) string {
+	code := strings.ToLower(strings.TrimSpace(game))
+	if alias, ok := legacyGameAliases[code]; ok {
+		return alias
+	}
+	return code
+}
 
 var (
 	ErrNotFound          = errors.New("producto no encontrado")
@@ -110,11 +134,11 @@ type Input struct {
 func (in Input) Validate() (Input, error) {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Description = strings.TrimSpace(in.Description)
-	in.Game = strings.TrimSpace(in.Game)
+	in.Game = NormalizeGameCode(in.Game)
 	in.Language = strings.TrimSpace(in.Language)
 
 	if !ValidGame(in.Game) {
-		return in, fmt.Errorf("el juego debe ser %q, %q, %q o vacío", GameMagic, GamePokemon, GameRiftbound)
+		return in, fmt.Errorf("el código de juego no es válido: usa minúsculas, números, guion o guion bajo (máximo %d caracteres)", maxGameCodeLength)
 	}
 	if in.Title == "" {
 		return in, errors.New("el título es requerido")
@@ -145,15 +169,18 @@ func ValidStatus(status string) bool {
 	return status == StatusActive || status == StatusHidden
 }
 
-// ValidGame indica si el código de juego es uno de los admitidos. Vacío es
-// válido y significa "sin especificar".
+// ValidGame valida la forma del código de juego. Vacío es válido y significa
+// "sin especificar". La existencia del juego se comprueba en la capa de
+// aplicación contra la tabla games, porque el admin puede crear juegos nuevos.
 func ValidGame(game string) bool {
-	switch game {
-	case "", GameMagic, GamePokemon, GameRiftbound:
+	game = NormalizeGameCode(game)
+	if game == "" {
 		return true
-	default:
+	}
+	if len(game) > maxGameCodeLength {
 		return false
 	}
+	return gameCodePattern.MatchString(game)
 }
 
 // ListFilter acota el listado. IncludeHidden es solo para el panel admin.

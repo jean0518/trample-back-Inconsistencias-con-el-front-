@@ -108,6 +108,11 @@ func (s *Storage) PutProductImage(ctx context.Context, productID int64, upload c
 	return s.put(ctx, objectPathFor("products", productID, extensionByContentType(upload.ContentType)), upload)
 }
 
+// PutGameImage sube icono/logo de juego bajo games/{id}/{kind}/
+func (s *Storage) PutGameImage(ctx context.Context, gameID int64, kind string, upload catalog.ImageUpload) (string, error) {
+	return s.put(ctx, objectPathFor(fmt.Sprintf("games/%s", kind), gameID, extensionByContentType(upload.ContentType)), upload)
+}
+
 func (s *Storage) put(ctx context.Context, objectKey string, upload catalog.ImageUpload) (string, error) {
 	if len(upload.Content) == 0 {
 		return "", fmt.Errorf("la imagen está vacía")

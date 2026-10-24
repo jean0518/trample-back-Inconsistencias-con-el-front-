@@ -120,6 +120,9 @@ func (r *SaleRepository) Search(ctx context.Context, f sale.ListFilter) ([]sale.
 			return nil, 0, fmt.Errorf("cargar items de la venta %d: %w", out[i].ID, err)
 		}
 	}
+	if err := r.loadCreditsForSales(ctx, out); err != nil {
+		return nil, 0, err
+	}
 	return out, total, nil
 }
 

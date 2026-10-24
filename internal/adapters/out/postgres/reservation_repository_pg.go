@@ -316,18 +316,19 @@ func (r *ReservationRepository) Confirm(ctx context.Context, userID string, ids 
 	}
 	defer tx.Rollback(ctx)
 
-	if err := confirmReservationsStrictTx(ctx, tx, userID, ids); err != nil {
+	if err := confirmReservationsStrictTx(ctx, tx, userID, ids, reservation.LogSold); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 
 // confirmReservationsStrictTx confirma TODAS las reservas del usuario indicadas y
-// registra el historial 'sold'. Si alguna ya no está activa devuelve
-// reservation.ErrNotFound sin tocar ninguna. Lo comparten Confirm y el registro de
-// ventas en efectivo/transferencia, para que la confirmación y la venta ocurran en
-// la misma transacción.
-func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, ids []int64) error {
+// registra el evento de historial indicado: 'reservada' mientras la recogida
+// sigue pendiente de pago y 'sold' cuando la venta ya está cobrada. Si alguna ya
+// no está activa devuelve reservation.ErrNotFound sin tocar ninguna. Lo
+// comparten Confirm y el registro de ventas, para que la confirmación y la venta
+// ocurran en la misma transacción.
+func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, ids []int64, logStatus string) error {
 	rows, err := tx.Query(ctx, `
 		SELECT cr.id, cr.quantity,
 		       c.id, c.name, cv.variant_name, il.language, il.price_usd, il.price_cop
@@ -376,7 +377,8 @@ func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, 
 		`, it.id); err != nil {
 			return fmt.Errorf("confirmar reserva: %w", err)
 		}
-		// Historico: la reserva se vendió (pedido confirmado).
+		// Historico: o sigue reservada (recogida pendiente de pago) o ya se
+		// vendió (cobro en el acto / pago aprobado).
 		if err := logReservation(ctx, tx, reservation.ReservationLog{
 			ReservationID: it.id,
 			UserID:        userID,
@@ -387,7 +389,7 @@ func confirmReservationsStrictTx(ctx context.Context, tx pgx.Tx, userID string, 
 			Quantity:      it.quantity,
 			PriceUSD:      it.details.PriceUSD,
 			PriceCOP:      it.details.PriceCOP,
-			Status:        reservation.LogSold,
+			Status:        logStatus,
 		}); err != nil {
 			return err
 		}
@@ -786,8 +788,9 @@ func logReservation(ctx context.Context, tx pgx.Tx, l reservation.ReservationLog
 }
 
 // reservationLogsSQL une el historial de reservas de cartas y de productos con
-// el estado actual de cada reserva: cuándo vence (solo si sigue activa) y si la
-// retiene un pago en línea abierto.
+// el estado actual de cada reserva: cuándo vence (si sigue activa o si está
+// apartada esperando el pago en tienda) y si la retiene un pago en línea
+// abierto.
 const reservationLogsSQL = `
 	SELECT 'card' AS kind, l.id, l.reservation_id, COALESCE(l.user_id::text, '') AS user_id,
 	       l.customer_name, l.customer_email,
@@ -795,7 +798,14 @@ const reservationLogsSQL = `
 	       0::bigint AS product_id, ''::text AS title,
 	       l.quantity, l.price_usd::float8 AS price_usd, l.price_cop::float8 AS price_cop,
 	       l.status, COALESCE(l.return_reason, '') AS return_reason, l.created_at,
-	       CASE WHEN cr.status = 'active' THEN cr.expires_at END AS expires_at,
+	       CASE
+	           WHEN l.status = 'reservada' THEN (
+	               SELECT s.pickup_deadline FROM sales s
+	               WHERE s.status = 'pending_pickup' AND cr.id = ANY(s.reservation_ids)
+	               ORDER BY s.id DESC LIMIT 1
+	           )
+	           WHEN cr.status = 'active' THEN cr.expires_at
+	       END AS expires_at,
 	       COALESCE(cr.status = 'active' AND EXISTS (
 	           SELECT 1 FROM payment_checkouts pc
 	           WHERE pc.status = 'open' AND pc.expires_at > now() AND cr.id = ANY(pc.reservation_ids)), false) AS in_checkout
@@ -808,7 +818,14 @@ const reservationLogsSQL = `
 	       COALESCE(l.product_id, 0), l.title,
 	       l.quantity, 0::float8, l.price_cop::float8,
 	       l.status, COALESCE(l.return_reason, ''), l.created_at,
-	       CASE WHEN pr.status = 'active' THEN pr.expires_at END,
+	       CASE
+	           WHEN l.status = 'reservada' THEN (
+	               SELECT s.pickup_deadline FROM sales s
+	               WHERE s.status = 'pending_pickup' AND pr.id = ANY(s.product_reservation_ids)
+	               ORDER BY s.id DESC LIMIT 1
+	           )
+	           WHEN pr.status = 'active' THEN pr.expires_at
+	       END,
 	       COALESCE(pr.status = 'active' AND EXISTS (
 	           SELECT 1 FROM payment_checkouts pc
 	           WHERE pc.status = 'open' AND pc.expires_at > now() AND pr.id = ANY(pc.product_reservation_ids)), false)

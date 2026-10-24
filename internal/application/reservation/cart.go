@@ -63,7 +63,7 @@ func (uc *CartUseCase) UpdateQuantity(ctx context.Context, userID string, id int
 // admin) con filtros, y el total sin paginar.
 func (uc *CartUseCase) ListLogs(ctx context.Context, f reservation.LogFilter) ([]reservation.ReservationLog, int, error) {
 	switch f.Status {
-	case "", reservation.LogReserved, reservation.LogReturned, reservation.LogSold:
+	case "", reservation.LogReserved, reservation.LogReservada, reservation.LogReturned, reservation.LogSold:
 	default:
 		return nil, 0, reservation.ErrInvalidLogFilter
 	}

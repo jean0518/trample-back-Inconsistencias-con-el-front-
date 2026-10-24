@@ -51,7 +51,7 @@ func (r *ExpansionRepository) ListExpansions(ctx context.Context, gameCode strin
 		SELECT e.id, e.game_id, e.external_id, e.name, e.code, e.series, e.total, e.release_date, e.logo_url, e.symbol_url
 		FROM expansions e
 		JOIN games g ON g.id = e.game_id
-		WHERE g.code = $1
+		WHERE LOWER(g.code) = LOWER(TRIM($1))
 		ORDER BY e.release_date DESC
 	`, gameCode)
 	if err != nil {

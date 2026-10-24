@@ -12,6 +12,11 @@ var ErrReservationExpired = errors.New("una o más reservas del carrito expiraro
 var ErrPaymentNotFound = errors.New("no hay una venta con esa referencia de pago")
 var ErrNotPendingPickup = errors.New("el pedido no está pendiente de recogida en tienda")
 var ErrForbidden = errors.New("no tienes acceso a esa venta")
+var ErrOrderNotEditable = errors.New("el pedido no se puede editar en su estado actual")
+var ErrCreditNotFound = errors.New("no existe ese crédito en tienda")
+var ErrCreditExists = errors.New("el pedido ya tiene un crédito en tienda")
+var ErrCreditNotOpen = errors.New("el crédito ya está cerrado")
+var ErrCreditPayment = errors.New("el abono no es válido para el saldo del crédito")
 
 // ErrEmailNotVerified se devuelve cuando el cliente intenta comprar sin haber
 // verificado su correo: sin un correo válido no le llegarían los avisos del
@@ -53,6 +58,8 @@ const (
 	PaymentBold     = "bold"
 	// PaymentStore es el pedido de recogida que se paga en el local.
 	PaymentStore = "tienda"
+	// PaymentCredit identifica una venta entregada a crédito en tienda.
+	PaymentCredit = "credito"
 
 	// Estados de una venta. Una venta solo existe cuando el pago entró
 	// (`paid`), así sea en efectivo, por transferencia o aprobado por la
@@ -66,6 +73,10 @@ const (
 	// StatusCancelled es un pedido de recogida que no se recogió a tiempo (o que
 	// el staff canceló); su stock ya volvió al inventario.
 	StatusCancelled = "cancelled"
+	// StatusCredit es un pedido entregado con un crédito en tienda: la mercancía
+	// salió, pero el cliente todavía debe el saldo. Pasa a 'paid' cuando el
+	// crédito queda en cero.
+	StatusCredit = "credit"
 
 	// PickupBusinessDays son los días hábiles que el cliente tiene para pagar y
 	// recoger un pedido en tienda.
@@ -135,6 +146,9 @@ type Sale struct {
 	// DeliveredAt es cuándo el pedido llegó al cliente: entregado por la
 	// transportadora o recogido en la tienda.
 	DeliveredAt time.Time
+	// Credit es la cuenta por cobrar asociada al pedido, si la tiene. Se carga al
+	// consultar; no se guarda en la fila de sales.
+	Credit *StoreCredit
 	// JustCreated es true solo en la llamada que creó el pedido (no se guarda):
 	// permite avisar al cliente una sola vez aunque el pago llegue por varias vías.
 	JustCreated bool
@@ -147,6 +161,7 @@ func (s Sale) Reference() string { return "#" + strconv.FormatInt(s.ID, 10) }
 // ListingID puede ser nil si la carta (listing) fue eliminada del inventario;
 // la venta se conserva gracias al snapshot de card_name/language/precios.
 type SaleItem struct {
+	ID        int64   `json:"id"`
 	ListingID *int64  `json:"listing_id"`
 	CardID    int64   `json:"card_id"`
 	CardName  string  `json:"card_name"`
@@ -167,6 +182,7 @@ type SaleItem struct {
 // precio al vender, para que el historial no cambie si el producto se edita.
 // ProductID es nil si el producto se eliminó.
 type ProductItem struct {
+	ID        int64  `json:"id"`
 	ProductID *int64 `json:"product_id"`
 	Title     string `json:"title"`
 	Quantity  int    `json:"quantity"`
@@ -325,4 +341,5 @@ type StageCounts struct {
 	Shipped   StageCount `json:"shipped"`
 	Closed    StageCount `json:"closed"`
 	Cancelled StageCount `json:"cancelled"`
+	Credit    StageCount `json:"credit"`
 }

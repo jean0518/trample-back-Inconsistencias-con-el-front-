@@ -86,6 +86,10 @@ type SaleRepository interface {
 	// CancelPickup cancela un pedido pendiente de recogida y devuelve su stock al
 	// inventario. Mismos errores que MarkPickupPaid.
 	CancelPickup(ctx context.Context, id int64) (sale.Sale, error)
+	// ExtendPickup corre `days` días hábiles el plazo de una recogida pendiente,
+	// conservando el stock apartado. Errores: ErrNotPendingPickup y
+	// ErrPaymentNotFound.
+	ExtendPickup(ctx context.Context, id int64, days int) (sale.Sale, error)
 	// ExpirePickups cancela los pedidos pendientes cuyo plazo venció en `now` y
 	// devuelve los que canceló. Cada uno se procesa por separado.
 	ExpirePickups(ctx context.Context, now time.Time) ([]sale.Sale, error)
@@ -107,6 +111,24 @@ type SaleRepository interface {
 	MarkDelivered(ctx context.Context, id int64) (sale.Sale, error)
 	// ConfirmReview quita la marca de revisión (ErrNotInReview si no la tenía).
 	ConfirmReview(ctx context.Context, id int64) (sale.Sale, error)
+
+	// UpdateOrder corrige datos de entrega, líneas, precios y estado de un
+	// pedido no cancelado, ajustando el stock por la diferencia. Ver
+	// sale.UpdateOrderInput.
+	UpdateOrder(ctx context.Context, in sale.UpdateOrderInput) (sale.Sale, error)
+
+	// CreateStoreCredit convierte un pedido pendiente en una cuenta por cobrar:
+	// entrega la mercancía y deja el pedido en 'credit' con el saldo pendiente.
+	CreateStoreCredit(ctx context.Context, in sale.NewCreditInput) (sale.StoreCredit, error)
+	// RegisterCreditPayment registra un abono y cierra crédito y pedido cuando
+	// el saldo llega a cero.
+	RegisterCreditPayment(ctx context.Context, creditID, amountCOP int64, note, createdBy string) (sale.StoreCredit, error)
+	// FindCreditByID devuelve un crédito con sus abonos.
+	FindCreditByID(ctx context.Context, id int64) (sale.StoreCredit, error)
+	// FindCreditBySale devuelve el crédito de un pedido.
+	FindCreditBySale(ctx context.Context, saleID int64) (sale.StoreCredit, error)
+	// ListCredits lista cuentas por cobrar y devuelve el total sin paginar.
+	ListCredits(ctx context.Context, f sale.CreditFilter) ([]sale.StoreCredit, int, error)
 
 	// FindByID devuelve una venta con sus items. Se usa para leer el pedido que
 	// dejó ApprovePayment, cuya referencia ya solo vive en el checkout.

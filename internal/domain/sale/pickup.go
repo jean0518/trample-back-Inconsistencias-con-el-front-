@@ -23,6 +23,29 @@ func PickupDeadlineFrom(from time.Time) time.Time {
 	return day.Add(24*time.Hour - time.Second)
 }
 
+// ExtendPickupDeadline corre la fecha límite de una recogida `extraBusinessDays`
+// días hábiles. Si el plazo ya venció (o no existe), cuenta desde `now`: así una
+// extensión siempre deja al cliente un plazo vigente. Devuelve el final del día
+// (23:59:59, hora de Colombia), igual que PickupDeadlineFrom.
+func ExtendPickupDeadline(current, now time.Time, extraBusinessDays int) time.Time {
+	if extraBusinessDays < 1 {
+		return current
+	}
+	base := current
+	if base.IsZero() || base.Before(now) {
+		base = now
+	}
+	d := base.In(storeZone)
+	day := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, storeZone)
+	for n := 0; n < extraBusinessDays; {
+		day = day.AddDate(0, 0, 1)
+		if wd := day.Weekday(); wd != time.Saturday && wd != time.Sunday {
+			n++
+		}
+	}
+	return day.Add(24*time.Hour - time.Second)
+}
+
 // ParseDateRange convierte las fechas YYYY-MM-DD de un filtro (hora de
 // Colombia) en el intervalo [from, to) que cubre ambos días completos. Las
 // fechas vacías no limitan (devuelven cero). Error si alguna no es válida o si

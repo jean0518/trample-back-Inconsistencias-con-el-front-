@@ -225,8 +225,8 @@ func (r *ProductRepositoryPG) List(ctx context.Context, f product.ListFilter) ([
 		where = append(where, fmt.Sprintf("p.title ILIKE $%d", len(args)))
 	}
 	if f.Game != "" {
-		args = append(args, f.Game)
-		where = append(where, fmt.Sprintf("p.game = $%d", len(args)))
+		args = append(args, productGameFilterValues(f.Game))
+		where = append(where, fmt.Sprintf("LOWER(TRIM(p.game)) = ANY($%d)", len(args)))
 	}
 	if f.Status != "" {
 		args = append(args, f.Status)
@@ -293,6 +293,16 @@ func (r *ProductRepositoryPG) List(ctx context.Context, f product.ListFilter) ([
 		items[i].Images = images[items[i].ID]
 	}
 	return items, total, nil
+}
+
+// productGameFilterValues incluye los alias históricos para que los productos
+// guardados antes de 021 (magic) sigan apareciendo al filtrar por mtg.
+func productGameFilterValues(value string) []string {
+	game := product.NormalizeGameCode(value)
+	if game == product.GameMagic {
+		return []string{product.GameMagic, "magic"}
+	}
+	return []string{game}
 }
 
 // escapeLike neutraliza los comodines de LIKE para que buscar "100%" no

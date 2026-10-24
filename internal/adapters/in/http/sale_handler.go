@@ -24,6 +24,8 @@ type SaleHandler struct {
 	checkStatus *appSale.CheckPaymentStatusUseCase
 	pickups     *appSale.PickupOrdersUseCase
 	fulfillment *appSale.FulfillmentUseCase
+	orders      *appSale.AdminOrdersUseCase
+	credits     *appSale.StoreCreditsUseCase
 }
 
 func NewSaleHandler(
@@ -34,8 +36,10 @@ func NewSaleHandler(
 	checkStatus *appSale.CheckPaymentStatusUseCase,
 	pickups *appSale.PickupOrdersUseCase,
 	fulfillment *appSale.FulfillmentUseCase,
+	orders *appSale.AdminOrdersUseCase,
+	credits *appSale.StoreCreditsUseCase,
 ) *SaleHandler {
-	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus, pickups: pickups, fulfillment: fulfillment}
+	return &SaleHandler{confirm: confirm, checkout: checkout, list: list, stats: stats, checkStatus: checkStatus, pickups: pickups, fulfillment: fulfillment, orders: orders, credits: credits}
 }
 
 // canSeeAllSales indica si el usuario puede consultar el historial completo de
@@ -55,6 +59,7 @@ func canSeeAllSales(user AuthUser) bool {
 }
 
 type saleItemResponse struct {
+	ID        int64   `json:"id"`
 	ListingID *int64  `json:"listing_id"`
 	CardID    int64   `json:"card_id"`
 	CardName  string  `json:"card_name"`
@@ -71,6 +76,7 @@ type saleItemResponse struct {
 
 // productItemResponse es una línea de producto propio de la tienda en un pedido.
 type productItemResponse struct {
+	ID        int64  `json:"id"`
 	ProductID *int64 `json:"product_id"`
 	Title     string `json:"title"`
 	Quantity  int    `json:"quantity"`
@@ -113,8 +119,10 @@ type saleResponse struct {
 	Carrier        string `json:"carrier,omitempty"`
 	TrackingNumber string `json:"tracking_number,omitempty"`
 	// DeliveredAt: entregado por la transportadora o recogido en la tienda.
-	DeliveredAt string             `json:"delivered_at,omitempty"`
-	Items       []saleItemResponse `json:"items"`
+	DeliveredAt string `json:"delivered_at,omitempty"`
+	// Credit es la cuenta por cobrar del pedido, si la tiene.
+	Credit *creditResponse    `json:"credit,omitempty"`
+	Items  []saleItemResponse `json:"items"`
 	// ProductItems son las líneas de productos propios de la tienda (siempre
 	// presente; vacío si el pedido es solo de cartas).
 	ProductItems []productItemResponse `json:"product_items"`
@@ -160,6 +168,7 @@ func newBoldCheckoutResponse(c payment.Checkout) *boldCheckoutResponse {
 
 func newSaleItemResponse(it sale.SaleItem) saleItemResponse {
 	return saleItemResponse{
+		ID:        it.ID,
 		ListingID: it.ListingID,
 		CardID:    it.CardID,
 		CardName:  it.CardName,
@@ -183,7 +192,7 @@ func newSaleResponse(s sale.Sale) saleResponse {
 	productItems := make([]productItemResponse, 0, len(s.ProductItems))
 	for _, it := range s.ProductItems {
 		productItems = append(productItems, productItemResponse{
-			ProductID: it.ProductID, Title: it.Title, Quantity: it.Quantity, PriceCOP: it.PriceCOP,
+			ID: it.ID, ProductID: it.ProductID, Title: it.Title, Quantity: it.Quantity, PriceCOP: it.PriceCOP,
 		})
 	}
 	return saleResponse{
@@ -213,6 +222,7 @@ func newSaleResponse(s sale.Sale) saleResponse {
 		Carrier:           s.Carrier,
 		TrackingNumber:    s.TrackingNumber,
 		DeliveredAt:       formatTime(s.DeliveredAt),
+		Credit:            newCreditResponse(s.Credit),
 		Items:             items,
 		ProductItems:      productItems,
 	}
@@ -391,12 +401,16 @@ func respondSaleError(w http.ResponseWriter, err error) {
 		Error(w, http.StatusBadRequest, "el carrito no tiene items para confirmar")
 	case errors.Is(err, sale.ErrInvalidInput):
 		Error(w, http.StatusBadRequest, "datos de la venta inválidos")
+	case errors.Is(err, sale.ErrCreditPayment):
+		Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, sale.ErrReservationExpired), errors.Is(err, sale.ErrCheckoutConflict),
 		errors.Is(err, sale.ErrInsufficientStock), errors.Is(err, sale.ErrNotPendingPickup),
 		errors.Is(err, sale.ErrCancelAlreadyRequested), errors.Is(err, sale.ErrNoCancelRequest),
-		errors.Is(err, sale.ErrNotShippable), errors.Is(err, sale.ErrNotInReview):
+		errors.Is(err, sale.ErrNotShippable), errors.Is(err, sale.ErrNotInReview),
+		errors.Is(err, sale.ErrOrderNotEditable), errors.Is(err, sale.ErrCreditExists),
+		errors.Is(err, sale.ErrCreditNotOpen):
 		Error(w, http.StatusConflict, err.Error())
-	case errors.Is(err, sale.ErrPaymentNotFound):
+	case errors.Is(err, sale.ErrPaymentNotFound), errors.Is(err, sale.ErrCreditNotFound):
 		Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, sale.ErrForbidden):
 		Error(w, http.StatusForbidden, err.Error())
@@ -745,6 +759,43 @@ func (h *SaleHandler) CancelPickup(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, newSaleResponse(s))
 }
 
+type extendPickupRequest struct {
+	Days int `json:"days"`
+}
+
+// ExtendPickup corre el plazo de una recogida pendiente. El pedido conserva su
+// stock apartado y sigue en 'pending_pickup'.
+//
+//	@Summary      Extender el plazo de una recogida en tienda
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path      int                  true  "ID del pedido"
+//	@Param        body  body      extendPickupRequest  true  "Días hábiles a extender"
+//	@Success      200   {object}  saleResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Router       /admin/sales/{id}/extend [post]
+func (h *SaleHandler) ExtendPickup(w http.ResponseWriter, r *http.Request) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	var body extendPickupRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	s, err := h.pickups.Extend(r.Context(), id, body.Days)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
 // RequestPickupCancel deja que el cliente pida cancelar su pedido de recogida.
 // No lo cancela: el staff aprueba (POST /admin/sales/{id}/cancel) o rechaza
 // (POST /admin/sales/{id}/reject-cancel). Los pedidos pagados en línea no se
@@ -872,6 +923,299 @@ func (h *SaleHandler) adminSaleAction(w http.ResponseWriter, r *http.Request, ac
 }
 
 func saleIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		Error(w, http.StatusBadRequest, "id inválido")
+		return 0, false
+	}
+	return id, true
+}
+
+type creditPaymentResponse struct {
+	ID        int64  `json:"id"`
+	AmountCOP int64  `json:"amount_cop"`
+	Note      string `json:"note"`
+	CreatedBy string `json:"created_by,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+type creditResponse struct {
+	ID            int64  `json:"id"`
+	SaleID        int64  `json:"sale_id"`
+	CustomerName  string `json:"customer_name"`
+	CustomerEmail string `json:"customer_email"`
+	TotalCOP      int64  `json:"total_cop"`
+	InitialCOP    int64  `json:"initial_cop"`
+	PaidCOP       int64  `json:"paid_cop"`
+	BalanceCOP    int64  `json:"balance_cop"`
+	DueDate       string `json:"due_date"`
+	Notes         string `json:"notes"`
+	CreatedBy     string `json:"created_by,omitempty"`
+	CreatedByName string `json:"created_by_name,omitempty"`
+	Status        string `json:"status"`
+	// Overdue se calcula al consultar: crédito abierto con saldo y fecha vencida.
+	Overdue   bool                    `json:"overdue"`
+	CreatedAt string                  `json:"created_at"`
+	UpdatedAt string                  `json:"updated_at"`
+	Payments  []creditPaymentResponse `json:"payments,omitempty"`
+}
+
+func newCreditResponse(c *sale.StoreCredit) *creditResponse {
+	if c == nil {
+		return nil
+	}
+	payments := make([]creditPaymentResponse, 0, len(c.Payments))
+	for _, p := range c.Payments {
+		payments = append(payments, creditPaymentResponse{
+			ID: p.ID, AmountCOP: p.AmountCOP, Note: p.Note,
+			CreatedBy: p.CreatedBy, CreatedAt: formatTime(p.CreatedAt),
+		})
+	}
+	return &creditResponse{
+		ID: c.ID, SaleID: c.SaleID, CustomerName: c.CustomerName, CustomerEmail: c.CustomerEmail,
+		TotalCOP: c.TotalCOP, InitialCOP: c.InitialCOP, PaidCOP: c.PaidCOP, BalanceCOP: c.BalanceCOP,
+		DueDate: c.DueDate.Format("2006-01-02"), Notes: c.Notes,
+		CreatedBy: c.CreatedBy, CreatedByName: c.CreatedByName, Status: c.Status,
+		Overdue: c.Overdue(time.Now()), CreatedAt: formatTime(c.CreatedAt), UpdatedAt: formatTime(c.UpdatedAt),
+		Payments: payments,
+	}
+}
+
+type updateOrderItemRequest struct {
+	ID        int64   `json:"id"`
+	ListingID *int64  `json:"listing_id"`
+	Quantity  int     `json:"quantity"`
+	PriceCOP  int64   `json:"price_cop"`
+	PriceUSD  float64 `json:"price_usd"`
+}
+
+type updateOrderProductRequest struct {
+	ID        int64  `json:"id"`
+	ProductID *int64 `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+	PriceCOP  int64  `json:"price_cop"`
+}
+
+type updateOrderRequest struct {
+	Address string `json:"address"`
+	City    string `json:"city"`
+	Phone   string `json:"phone"`
+	// Status vacío conserva el estado actual.
+	Status string `json:"status"`
+	// Items y ProductItems son opcionales: si se envían, reemplazan por completo
+	// las líneas actuales y el stock se ajusta por la diferencia.
+	Items        *[]updateOrderItemRequest    `json:"items"`
+	ProductItems *[]updateOrderProductRequest `json:"product_items"`
+}
+
+// UpdateOrder corrige datos, líneas, precios o estado de un pedido existente.
+// Si el pedido pasa a pagado o cancelado, se envía el correo correspondiente.
+//
+//	@Summary      Editar un pedido
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path      int                 true  "ID del pedido"
+//	@Param        body  body      updateOrderRequest  true  "Cambios del pedido"
+//	@Success      200   {object}  saleResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Router       /admin/sales/{id} [put]
+func (h *SaleHandler) UpdateOrder(w http.ResponseWriter, r *http.Request) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	user, _ := AuthFromContext(r.Context())
+	var body updateOrderRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+
+	in := sale.UpdateOrderInput{
+		ID: id, Address: body.Address, City: body.City, Phone: body.Phone,
+		Status: body.Status, UpdatedBy: user.ID,
+	}
+	if body.Items != nil {
+		in.Items = make([]sale.OrderItemInput, 0, len(*body.Items))
+		for _, it := range *body.Items {
+			in.Items = append(in.Items, sale.OrderItemInput{
+				ID: it.ID, ListingID: it.ListingID, Quantity: it.Quantity,
+				PriceCOP: it.PriceCOP, PriceUSD: it.PriceUSD,
+			})
+		}
+	}
+	if body.ProductItems != nil {
+		in.ProductItems = make([]sale.OrderProductInput, 0, len(*body.ProductItems))
+		for _, it := range *body.ProductItems {
+			in.ProductItems = append(in.ProductItems, sale.OrderProductInput{
+				ID: it.ID, ProductID: it.ProductID, Quantity: it.Quantity, PriceCOP: it.PriceCOP,
+			})
+		}
+	}
+
+	s, err := h.orders.Update(r.Context(), in)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newSaleResponse(s))
+}
+
+type createCreditRequest struct {
+	SaleID     int64  `json:"sale_id"`
+	InitialCOP int64  `json:"initial_cop"`
+	DueDate    string `json:"due_date"` // YYYY-MM-DD
+	Notes      string `json:"notes"`
+}
+
+// CreateStoreCredit entrega un pedido pendiente a crédito y abre la cuenta por
+// cobrar. El pedido pasa a 'credit' y sus reservas quedan vendidas; el saldo se
+// cobra después con abonos.
+//
+//	@Summary      Crear un crédito en tienda
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        body  body      createCreditRequest  true  "Datos del crédito"
+//	@Success      201   {object}  creditResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Router       /admin/sales/{id}/credit [post]
+func (h *SaleHandler) CreateStoreCredit(w http.ResponseWriter, r *http.Request) {
+	id, ok := saleIDParam(w, r)
+	if !ok {
+		return
+	}
+	user, _ := AuthFromContext(r.Context())
+	var body createCreditRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	if body.SaleID != 0 && body.SaleID != id {
+		Error(w, http.StatusBadRequest, "el pedido del body no coincide con la ruta")
+		return
+	}
+	due, err := time.ParseInLocation("2006-01-02", body.DueDate, time.FixedZone("COT", -5*60*60))
+	if err != nil {
+		Error(w, http.StatusBadRequest, "due_date debe ser YYYY-MM-DD")
+		return
+	}
+	c, err := h.credits.Create(r.Context(), sale.NewCreditInput{
+		SaleID: id, InitialCOP: body.InitialCOP, DueDate: due, Notes: body.Notes, CreatedBy: user.ID,
+	})
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusCreated, newCreditResponse(&c))
+}
+
+type creditPaymentRequest struct {
+	AmountCOP int64  `json:"amount_cop"`
+	Note      string `json:"note"`
+}
+
+// AddCreditPayment registra un abono a la cuenta por cobrar. Si salda el saldo,
+// el crédito y el pedido pasan a pagados.
+//
+//	@Summary      Registrar abono de un crédito
+//	@Tags         admin
+//	@Accept       json
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id    path      int                   true  "ID del crédito"
+//	@Param        body  body      creditPaymentRequest  true  "Abono"
+//	@Success      200   {object}  creditResponse
+//	@Failure      400   {object}  object{error=string}
+//	@Failure      404   {object}  object{error=string}
+//	@Failure      409   {object}  object{error=string}
+//	@Router       /admin/credits/{id}/payments [post]
+func (h *SaleHandler) AddCreditPayment(w http.ResponseWriter, r *http.Request) {
+	id, ok := creditIDParam(w, r)
+	if !ok {
+		return
+	}
+	user, _ := AuthFromContext(r.Context())
+	var body creditPaymentRequest
+	if err := Decode(r, &body); err != nil {
+		Error(w, http.StatusBadRequest, "body inválido")
+		return
+	}
+	c, err := h.credits.AddPayment(r.Context(), id, body.AmountCOP, body.Note, user.ID)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newCreditResponse(&c))
+}
+
+// ListCredits devuelve las cuentas por cobrar con filtros. El total sin paginar
+// va en X-Total-Count.
+//
+//	@Summary      Listar créditos en tienda
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        status   query  string  false  "open | paid | cancelled"
+//	@Param        overdue  query  bool    false  "Solo vencidos"
+//	@Param        q        query  string  false  "Cliente, correo, notas o #pedido"
+//	@Param        limit    query  int     false  "Límite (default 50, máx. 500)"
+//	@Param        offset   query  int     false  "Offset"
+//	@Success      200  {array}   creditResponse
+//	@Header       200  {integer} X-Total-Count  "Total de resultados"
+//	@Failure      400  {object}  object{error=string}
+//	@Router       /admin/credits [get]
+func (h *SaleHandler) ListCredits(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	overdue, _ := strconv.ParseBool(q.Get("overdue"))
+	items, total, err := h.credits.List(r.Context(), sale.CreditFilter{
+		Status: q.Get("status"), Overdue: overdue, Query: q.Get("q"), Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	resp := make([]*creditResponse, 0, len(items))
+	for i := range items {
+		resp = append(resp, newCreditResponse(&items[i]))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	JSON(w, http.StatusOK, resp)
+}
+
+// GetCredit devuelve una cuenta por cobrar con sus abonos.
+//
+//	@Summary      Consultar un crédito
+//	@Tags         admin
+//	@Produce      json
+//	@Security     BearerAuth
+//	@Param        id   path      int  true  "ID del crédito"
+//	@Success      200  {object}  creditResponse
+//	@Failure      404  {object}  object{error=string}
+//	@Router       /admin/credits/{id} [get]
+func (h *SaleHandler) GetCredit(w http.ResponseWriter, r *http.Request) {
+	id, ok := creditIDParam(w, r)
+	if !ok {
+		return
+	}
+	c, err := h.credits.Get(r.Context(), id)
+	if err != nil {
+		respondSaleError(w, err)
+		return
+	}
+	JSON(w, http.StatusOK, newCreditResponse(&c))
+}
+
+func creditIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
 		Error(w, http.StatusBadRequest, "id inválido")

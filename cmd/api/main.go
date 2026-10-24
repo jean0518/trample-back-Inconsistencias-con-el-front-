@@ -109,7 +109,7 @@ func main() {
 	// Productos propios de la tienda: módulo aparte de las cartas, con su propio
 	// repositorio y fotos (mismo bucket de Supabase, carpeta products/).
 	productRepo := postgres.NewProductRepositoryPG(pool, imageStorage)
-	manageProductsUC := appProduct.NewManageUseCase(productRepo)
+	manageProductsUC := appProduct.NewManageUseCase(productRepo).WithGames(gameRepo)
 	queryProductsUC := appProduct.NewQueryUseCase(productRepo)
 	productReservationRepo := postgres.NewProductReservationRepositoryPG(pool)
 	productCartUC := appProduct.NewCartUseCase(productReservationRepo)
@@ -119,7 +119,8 @@ func main() {
 	priceNotifier := telegram.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
 	processWebhookUC := appCatalog.NewProcessWebhookUseCase(searchUC, cardRepo, priceNotifier, log)
 	listCardsUC := appCatalog.NewListCardsUseCase(cardRepo)
-	gamesUC := appCatalog.NewGamesUseCase(gameRepo)
+	gamesUC := appCatalog.NewGamesUseCase(gameRepo, imageStorage)
+	deleteGameUC := appCatalog.NewDeleteGameUseCase(gameRepo, userRepo)
 	loginUC := appAuth.NewLoginUseCase(userRepo, cfg.JWTSecret)
 	createListingUC := appListing.NewCreateListingUseCase(listingRepo, ownerRepo, trmClient)
 	listListingsUC := appListing.NewListListingsUseCase(listingRepo)
@@ -167,6 +168,8 @@ func main() {
 		WithNotifier(purchaseNotifier).
 		WithEmailVerification(userRepo)
 	pickupOrdersUC := appSale.NewPickupOrdersUseCase(saleRepo, purchaseNotifier)
+	adminOrdersUC := appSale.NewAdminOrdersUseCase(saleRepo, purchaseNotifier)
+	storeCreditsUC := appSale.NewStoreCreditsUseCase(saleRepo)
 	checkPaymentUC := appSale.NewCheckPaymentStatusUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
 	processPaymentEventUC := appSale.NewProcessPaymentEventUseCase(saleRepo, boldClient).WithNotifier(purchaseNotifier)
 	expireCheckoutsUC := appSale.NewExpireCheckoutsUseCase(saleRepo).WithNotifier(purchaseNotifier)
@@ -180,7 +183,7 @@ func main() {
 	authMiddleware := httpadapter.NewAuthMiddleware([]byte(cfg.JWTSecret)).WithUserRepository(userRepo)
 	router := httpadapter.NewRouter(httpadapter.Handlers{
 		Auth:              httpadapter.NewAuthHandler(registerUC, loginUC, verifyEmailUC, secureCookie),
-		Games:             httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC),
+		Games:             httpadapter.NewGamesHandler(gamesUC, syncExpansionsUC, deleteGameUC),
 		Catalog:           httpadapter.NewCatalogHandler(listCardsUC),
 		Pokemon:           httpadapter.NewPokemonHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
 		Magic:             httpadapter.NewMagicHandler(searchUC, priceByLanguageUC, syncExpansionsUC, importCardUC, importListingUC),
@@ -192,7 +195,7 @@ func main() {
 		AdminUsers:        httpadapter.NewAdminUserHandler(createAdminUC, listAdminsUC, updateAdminUserUC, deleteAdminUC, panelsListUC),
 		AdminReservations: httpadapter.NewAdminReservationHandler(adminReservationsUC),
 		Cart:              httpadapter.NewCartHandler(cartUC),
-		Sales:             httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC, fulfillmentUC),
+		Sales:             httpadapter.NewSaleHandler(confirmSaleUC, createCheckoutUC, listSalesUC, statsSalesUC, checkPaymentUC, pickupOrdersUC, fulfillmentUC, adminOrdersUC, storeCreditsUC),
 		Dashboard:         httpadapter.NewDashboardHandler(dashboardSummaryUC, salesBreakdownUC),
 		Inventory:         httpadapter.NewInventoryHandler(manualListingUC, newExpansionUC),
 		CardImages:        httpadapter.NewCardImageHandler(cardImageRepo),

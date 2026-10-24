@@ -17,12 +17,13 @@ const AuthCookieName = "trample_token"
 type ctxKey string
 
 type AuthUser struct {
-	ID          string
-	Email       string
-	FirstName   string
-	LastName    string
-	Role        string
-	Permissions []string
+	ID            string
+	Email         string
+	FirstName     string
+	LastName      string
+	Role          string
+	Permissions   []string
+	IsDirectAdmin bool
 }
 
 type authClaims struct {
@@ -99,12 +100,14 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 
 		// Un usuario desactivado pierde el acceso de inmediato, aunque su token
 		// siga vigente: se revalida el estado contra la base en cada petición.
+		isDirectAdmin := false
 		if m.users != nil {
 			user, err := m.users.FindByID(r.Context(), sub)
 			if err != nil || !user.IsActive() {
 				Error(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
+			isDirectAdmin = user.IsDirectAdmin
 		}
 
 		perms := claims.Permissions
@@ -112,12 +115,13 @@ func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			perms = []string{}
 		}
 		ctx := context.WithValue(r.Context(), authCtxKey, AuthUser{
-			ID:          sub,
-			Email:       claims.Email,
-			FirstName:   claims.FirstName,
-			LastName:    claims.LastName,
-			Role:        claims.Role,
-			Permissions: perms,
+			ID:            sub,
+			Email:         claims.Email,
+			FirstName:     claims.FirstName,
+			LastName:      claims.LastName,
+			Role:          claims.Role,
+			Permissions:   perms,
+			IsDirectAdmin: isDirectAdmin,
 		})
 
 		next.ServeHTTP(w, r.WithContext(ctx))

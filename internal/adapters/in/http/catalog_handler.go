@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	appCatalog "trample-back/internal/application/catalog"
@@ -45,7 +46,7 @@ func (h *CatalogHandler) ListCards(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(q.Get("page_size"))
 
 	result, err := h.listCards.List(r.Context(), out.ListCardsParams{
-		GameCode:    q.Get("game_code"),
+		GameCode:    strings.ToLower(strings.TrimSpace(q.Get("game_code"))),
 		ExpansionID: expansionID,
 		OwnerID:     ownerID,
 		Language:    q.Get("language"),

@@ -117,6 +117,9 @@ type fakeSales struct {
 	reminded map[int64]bool
 	// lastFilter es el último filtro recibido por Search o CountByStage.
 	lastFilter sale.ListFilter
+	// credits guarda las cuentas por cobrar creadas por los tests.
+	credits      map[int64]sale.StoreCredit
+	nextCreditID int64
 }
 
 func newFakeSales() *fakeSales {
@@ -125,6 +128,7 @@ func newFakeSales() *fakeSales {
 		open:      map[string]string{},
 		sales:     map[int64]sale.Sale{},
 		eventIDs:  map[string]bool{},
+		credits:   map[int64]sale.StoreCredit{},
 	}
 }
 
@@ -435,6 +439,120 @@ func (f *fakeSales) CancelPickup(_ context.Context, id int64) (sale.Sale, error)
 	f.sales[id] = s
 	f.restocked = append(f.restocked, id)
 	return s, nil
+}
+
+func (f *fakeSales) ExtendPickup(_ context.Context, id int64, days int) (sale.Sale, error) {
+	s, ok := f.sales[id]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	if s.Status != sale.StatusPendingPickup {
+		return sale.Sale{}, sale.ErrNotPendingPickup
+	}
+	s.PickupDeadline = sale.ExtendPickupDeadline(s.PickupDeadline, time.Now(), days)
+	f.sales[id] = s
+	return s, nil
+}
+
+func (f *fakeSales) UpdateOrder(_ context.Context, in sale.UpdateOrderInput) (sale.Sale, error) {
+	s, ok := f.sales[in.ID]
+	if !ok {
+		return sale.Sale{}, sale.ErrPaymentNotFound
+	}
+	s.Address, s.City, s.Phone = in.Address, in.City, in.Phone
+	if in.Status != "" {
+		s.Status = in.Status
+	}
+	f.sales[s.ID] = s
+	return s, nil
+}
+
+func (f *fakeSales) CreateStoreCredit(_ context.Context, in sale.NewCreditInput) (sale.StoreCredit, error) {
+	s, ok := f.sales[in.SaleID]
+	if !ok {
+		return sale.StoreCredit{}, sale.ErrPaymentNotFound
+	}
+	if s.Status != sale.StatusPendingPickup {
+		return sale.StoreCredit{}, sale.ErrNotPendingPickup
+	}
+	for _, c := range f.credits {
+		if c.SaleID == in.SaleID {
+			return sale.StoreCredit{}, sale.ErrCreditExists
+		}
+	}
+	if in.InitialCOP > s.TotalCOP {
+		return sale.StoreCredit{}, sale.ErrCreditPayment
+	}
+	f.nextCreditID++
+	c := sale.StoreCredit{
+		ID: f.nextCreditID, SaleID: s.ID, UserID: s.UserID, TotalCOP: s.TotalCOP,
+		InitialCOP: in.InitialCOP, PaidCOP: in.InitialCOP, BalanceCOP: s.TotalCOP - in.InitialCOP,
+		DueDate: in.DueDate, Notes: in.Notes, CreatedBy: in.CreatedBy, Status: sale.CreditOpen,
+	}
+	if c.BalanceCOP == 0 {
+		c.Status = sale.CreditPaid
+		s.Status = sale.StatusPaid
+	} else {
+		s.Status = sale.StatusCredit
+	}
+	f.credits[c.ID] = c
+	f.sales[s.ID] = s
+	return c, nil
+}
+
+func (f *fakeSales) RegisterCreditPayment(_ context.Context, creditID, amountCOP int64, note, createdBy string) (sale.StoreCredit, error) {
+	c, ok := f.credits[creditID]
+	if !ok {
+		return sale.StoreCredit{}, sale.ErrCreditNotFound
+	}
+	if c.Status != sale.CreditOpen {
+		return sale.StoreCredit{}, sale.ErrCreditNotOpen
+	}
+	if amountCOP <= 0 || amountCOP > c.BalanceCOP {
+		return sale.StoreCredit{}, sale.ErrCreditPayment
+	}
+	c.PaidCOP += amountCOP
+	c.BalanceCOP -= amountCOP
+	c.Payments = append(c.Payments, sale.CreditPayment{
+		CreditID: creditID, AmountCOP: amountCOP, Note: note, CreatedBy: createdBy,
+	})
+	if c.BalanceCOP == 0 {
+		c.Status = sale.CreditPaid
+		s := f.sales[c.SaleID]
+		s.Status = sale.StatusPaid
+		f.sales[c.SaleID] = s
+	}
+	f.credits[creditID] = c
+	return c, nil
+}
+
+func (f *fakeSales) FindCreditByID(_ context.Context, id int64) (sale.StoreCredit, error) {
+	c, ok := f.credits[id]
+	if !ok {
+		return sale.StoreCredit{}, sale.ErrCreditNotFound
+	}
+	return c, nil
+}
+
+func (f *fakeSales) FindCreditBySale(_ context.Context, saleID int64) (sale.StoreCredit, error) {
+	for _, c := range f.credits {
+		if c.SaleID == saleID {
+			return c, nil
+		}
+	}
+	return sale.StoreCredit{}, sale.ErrCreditNotFound
+}
+
+func (f *fakeSales) ListCredits(_ context.Context, filter sale.CreditFilter) ([]sale.StoreCredit, int, error) {
+	f.lastFilter = sale.ListFilter{Query: filter.Query}
+	var out []sale.StoreCredit
+	for _, c := range f.credits {
+		if filter.Status != "" && c.Status != filter.Status {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, len(out), nil
 }
 
 func (f *fakeSales) ExpirePickups(_ context.Context, now time.Time) ([]sale.Sale, error) {

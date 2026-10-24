@@ -50,6 +50,15 @@ func (uc *PickupOrdersUseCase) Cancel(ctx context.Context, id int64) (sale.Sale,
 	return s, nil
 }
 
+// Extend corre el plazo de recogida entre 1 y 30 días hábiles. No cobra ni
+// libera el stock: el pedido sigue pendiente y apartado.
+func (uc *PickupOrdersUseCase) Extend(ctx context.Context, id int64, days int) (sale.Sale, error) {
+	if days < 1 || days > 30 {
+		return sale.Sale{}, sale.ErrInvalidInput
+	}
+	return uc.sales.ExtendPickup(ctx, id, days)
+}
+
 // RequestCancel registra que el cliente quiere cancelar su pedido de recogida.
 // No se cancela todavía: el staff la aprueba (Cancel) o la rechaza
 // (RejectCancel). Solo aplica a la recogida en tienda; un pedido pagado en línea

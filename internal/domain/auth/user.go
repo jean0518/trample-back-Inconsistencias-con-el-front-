@@ -41,6 +41,7 @@ const (
 	PermVentas       = "ventas"
 	PermPedidos      = "pedidos"
 	PermInventario   = "inventario"
+	PermJuegos       = "juegos"
 	PermPropietarios = "propietarios"
 	PermReservas     = "reservas"
 )
@@ -57,6 +58,10 @@ type User struct {
 	// Status del staff en admin_users ("active" | "inactive"). Los clientes
 	// no tienen registro ahí; para ellos queda vacío y se consideran activos.
 	Status string
+
+	// IsDirectAdmin identifica a los administradores originales, no a los
+	// usuarios admin creados o editables desde el panel (created_by no nulo).
+	IsDirectAdmin bool
 
 	// Verificación del correo. El token solo existe mientras hay una
 	// verificación pendiente.

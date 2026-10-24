@@ -91,6 +91,38 @@ func TestPickup_MarcarPagadoUnaSolaVez(t *testing.T) {
 	}
 }
 
+func TestPickup_ExtenderConservaElPedidoApartado(t *testing.T) {
+	current := time.Now().Add(time.Hour)
+	uc, sales, _, id := pendingPickup(t, current)
+
+	s, err := uc.Extend(context.Background(), id, 2)
+	if err != nil {
+		t.Fatalf("Extend: %v", err)
+	}
+	if s.Status != sale.StatusPendingPickup || sales.sales[id].Status != sale.StatusPendingPickup {
+		t.Errorf("el pedido dejó de estar pendiente: %q", s.Status)
+	}
+	want := sale.ExtendPickupDeadline(current, time.Now(), 2)
+	if !s.PickupDeadline.Equal(want) {
+		t.Errorf("PickupDeadline = %v, se esperaba %v", s.PickupDeadline, want)
+	}
+	if len(sales.restocked) != 0 {
+		t.Error("extender no debe devolver stock")
+	}
+
+	if _, err := uc.Extend(context.Background(), id, 0); !errors.Is(err, sale.ErrInvalidInput) {
+		t.Errorf("0 días: err = %v, se esperaba ErrInvalidInput", err)
+	}
+	if _, err := uc.Extend(context.Background(), id, 31); !errors.Is(err, sale.ErrInvalidInput) {
+		t.Errorf("31 días: err = %v, se esperaba ErrInvalidInput", err)
+	}
+
+	sales.sales[id] = sale.Sale{ID: id, UserID: testUser, Status: sale.StatusPaid}
+	if _, err := uc.Extend(context.Background(), id, 1); !errors.Is(err, sale.ErrNotPendingPickup) {
+		t.Errorf("pedido pagado: err = %v, se esperaba ErrNotPendingPickup", err)
+	}
+}
+
 func TestPickup_CancelarDevuelveStockYAvisa(t *testing.T) {
 	uc, sales, mailer, id := pendingPickup(t, time.Now().Add(time.Hour))
 

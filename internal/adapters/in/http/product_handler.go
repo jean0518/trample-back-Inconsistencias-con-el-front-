@@ -102,7 +102,7 @@ func writeProductError(w http.ResponseWriter, err error) {
 func isProductValidation(err error) bool {
 	msg := err.Error()
 	for _, prefix := range []string{
-		"el título", "la descripción", "el precio", "el stock", "el juego", "estado inválido", "selecciona",
+		"el título", "la descripción", "el precio", "el stock", "el juego", "el código de juego", "estado inválido", "selecciona",
 		"la URL de la imagen", "la imagen", "el archivo", "formato no soportado",
 		"no se pudo identificar",
 	} {
@@ -135,7 +135,7 @@ func listFilterFromQuery(r *http.Request) product.ListFilter {
 	}
 	return product.ListFilter{
 		Query:    q.Get("q"),
-		Game:     q.Get("game"),
+		Game:     strings.ToLower(strings.TrimSpace(q.Get("game"))),
 		Status:   q.Get("status"),
 		Language: q.Get("language"),
 		SoldOut:  soldOut,

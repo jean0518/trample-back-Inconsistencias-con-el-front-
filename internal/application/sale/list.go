@@ -33,10 +33,10 @@ const (
 
 // validFilterValues son los valores admitidos de cada filtro enumerado.
 var validFilterValues = map[string]map[string]bool{
-	"status":          {sale.StatusPaid: true, sale.StatusPendingPickup: true, sale.StatusCancelled: true},
+	"status":          {sale.StatusPaid: true, sale.StatusPendingPickup: true, sale.StatusCancelled: true, sale.StatusCredit: true},
 	"shipping_status": {sale.ShippingPending: true, sale.ShippingShipped: true, sale.ShippingDelivered: true},
 	"fulfillment":     {sale.FulfillmentPickup: true, sale.FulfillmentShipping: true},
-	"payment_method":  {sale.PaymentBold: true, sale.PaymentCash: true, sale.PaymentTransfer: true, sale.PaymentStore: true},
+	"payment_method":  {sale.PaymentBold: true, sale.PaymentCash: true, sale.PaymentTransfer: true, sale.PaymentStore: true, sale.PaymentCredit: true},
 }
 
 // validateFilter rechaza valores desconocidos en vez de devolver un listado

@@ -26,6 +26,9 @@ type authUserResponse struct {
 	Permissions []string `json:"permissions"`
 	// EmailVerified es false hasta que el cliente abre el enlace del correo.
 	EmailVerified bool `json:"email_verified"`
+	// IsDirectAdmin permite acciones críticas (p. ej. borrar juegos) solo a
+	// los administradores originales, no a los creados desde el panel.
+	IsDirectAdmin bool `json:"is_direct_admin"`
 }
 
 func newAuthUserResponse(u auth.User) authUserResponse {
@@ -41,6 +44,7 @@ func newAuthUserResponse(u auth.User) authUserResponse {
 		Role:          u.Role,
 		Permissions:   perms,
 		EmailVerified: u.EmailVerified,
+		IsDirectAdmin: u.IsDirectAdmin,
 	}
 }
 
@@ -165,6 +169,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		Role:          authUser.Role,
 		Permissions:   perms,
 		EmailVerified: verified,
+		IsDirectAdmin: authUser.IsDirectAdmin,
 	})
 }
 

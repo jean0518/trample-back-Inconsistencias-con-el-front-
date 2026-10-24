@@ -121,6 +121,16 @@ func (f *fakeRepo) GetImage(context.Context, int64) (string, []byte, error) {
 
 var png = catalog.ImageUpload{Content: []byte{1}, ContentType: "image/png"}
 
+type fakeGames map[string]catalog.Game
+
+func (f fakeGames) GetByCode(_ context.Context, code string) (catalog.Game, error) {
+	g, ok := f[code]
+	if !ok {
+		return catalog.Game{}, errors.New("juego no encontrado")
+	}
+	return g, nil
+}
+
 func validCreate() CreateInput {
 	return CreateInput{Title: "Caja Pokémon", PriceCOP: 450000, Stock: 2}
 }
@@ -258,9 +268,44 @@ func TestBulkUpdateStatusAndGame(t *testing.T) {
 	if _, err := uc.BulkUpdate(ctx, nil, nil, nil); err == nil {
 		t.Error("sin ids debía fallar")
 	}
-	bad := "otro"
+	bad := "otro juego"
 	if _, err := uc.BulkUpdate(ctx, []int64{a.ID}, nil, &bad); err == nil {
 		t.Error("juego inválido debía fallar")
+	}
+}
+
+func TestGameLookupAllowsNewGamesAndNormalizesLegacy(t *testing.T) {
+	repo := newFakeRepo()
+	uc := NewManageUseCase(repo).WithGames(fakeGames{
+		"mtg":      {Code: "mtg", Name: "Magic"},
+		"beyblade": {Code: "beyblade", Name: "Beyblade X TCG"},
+	})
+	ctx := context.Background()
+
+	nuevo := validCreate()
+	nuevo.Game = "BEYBLADE"
+	created, err := uc.Create(ctx, "admin-1", nuevo)
+	if err != nil {
+		t.Fatalf("juego nuevo debía aceptarse: %v", err)
+	}
+	if created.Game != "beyblade" {
+		t.Errorf("game = %q, esperaba beyblade", created.Game)
+	}
+
+	legacy := validCreate()
+	legacy.Game = "magic"
+	created, err = uc.Create(ctx, "admin-1", legacy)
+	if err != nil {
+		t.Fatalf("alias magic debía normalizarse: %v", err)
+	}
+	if created.Game != "mtg" {
+		t.Errorf("game = %q, esperaba mtg", created.Game)
+	}
+
+	missing := validCreate()
+	missing.Game = "no-existe"
+	if _, err := uc.Create(ctx, "admin-1", missing); err == nil {
+		t.Error("un juego inexistente debía fallar")
 	}
 }
 

@@ -250,14 +250,15 @@ func updateOrderCardsTx(ctx context.Context, tx pgx.Tx, saleID int64, inputs []s
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO sale_items
 				(sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
-				 variant_name, game_code, game_name, expansion_name)
+				 variant_name, game_code, game_name, expansion_name, owner_id, owner_name)
 			SELECT $1, il.id, c.id, c.name, il.language, $3, $4, $5,
-			       cv.variant_name, g.code, g.name, e.name
+			       cv.variant_name, g.code, g.name, e.name, o.id, COALESCE(o.name, '')
 			  FROM inventory_listings il
 			  JOIN card_variants cv ON cv.id = il.variant_id
 			  JOIN cards c ON c.id = cv.card_id
 			  JOIN games g ON g.id = c.game_id
 			  JOIN expansions e ON e.id = c.expansion_id
+			  LEFT JOIN owners o ON o.id = il.owner_id
 			 WHERE il.id = $2
 		`, saleID, *in.ListingID, in.Quantity, in.PriceCOP, in.PriceUSD); err != nil {
 			return fmt.Errorf("agregar carta al pedido %d: %w", saleID, err)

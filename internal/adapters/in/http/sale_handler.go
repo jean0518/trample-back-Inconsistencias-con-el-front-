@@ -72,6 +72,9 @@ type saleItemResponse struct {
 	GameCode      string `json:"game_code"`
 	GameName      string `json:"game_name"`
 	ExpansionName string `json:"expansion_name"`
+	// Propietario al vender: carpeta física de la carta.
+	OwnerID   *int64 `json:"owner_id,omitempty"`
+	OwnerName string `json:"owner_name,omitempty"`
 }
 
 // productItemResponse es una línea de producto propio de la tienda en un pedido.
@@ -181,6 +184,8 @@ func newSaleItemResponse(it sale.SaleItem) saleItemResponse {
 		GameCode:      it.GameCode,
 		GameName:      it.GameName,
 		ExpansionName: it.ExpansionName,
+		OwnerID:       it.OwnerID,
+		OwnerName:     it.OwnerName,
 	}
 }
 

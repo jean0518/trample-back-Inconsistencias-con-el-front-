@@ -176,6 +176,10 @@ type SaleItem struct {
 	GameCode      string `json:"game_code,omitempty"`
 	GameName      string `json:"game_name,omitempty"`
 	ExpansionName string `json:"expansion_name,omitempty"`
+	// Snapshot del propietario al vender: indica de qué carpeta física sacar
+	// la carta incluso si el listing se elimina o cambia de dueño después.
+	OwnerID   *int64 `json:"owner_id,omitempty"`
+	OwnerName string `json:"owner_name,omitempty"`
 }
 
 // ProductItem es una línea de producto de la venta: snapshot del título y el

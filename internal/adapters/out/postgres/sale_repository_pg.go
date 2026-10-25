@@ -144,21 +144,25 @@ func insertSale(ctx context.Context, tx pgx.Tx, s sale.Sale, strict bool) (sale.
 		// campo) se toma del listing. El juego y la expansión salen de la carta.
 		err := tx.QueryRow(ctx, `
 			INSERT INTO sale_items (sale_id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
-			                        variant_name, game_code, game_name, expansion_name)
+			                        variant_name, game_code, game_name, expansion_name, owner_id, owner_name)
 			SELECT $1, $2, $3, $4, $5, $6, $7, $8,
 			       COALESCE(NULLIF($9, ''), (SELECT cv.variant_name FROM inventory_listings il
 			                                 JOIN card_variants cv ON cv.id = il.variant_id WHERE il.id = $2)),
-			       g.code, g.name, e.name
+			       g.code, g.name, e.name, o.id, COALESCE(o.name, '')
 			FROM (SELECT 1) one
 			LEFT JOIN cards c ON c.id = $3
 			LEFT JOIN games g ON g.id = c.game_id
 			LEFT JOIN expansions e ON e.id = c.expansion_id
+			LEFT JOIN inventory_listings il ON il.id = $2
+			LEFT JOIN owners o ON o.id = il.owner_id
 			RETURNING id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
-			          COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, '')
+			          COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, ''),
+			          owner_id, COALESCE(owner_name, '')
 		`, created.ID, it.ListingID, it.CardID, it.CardName, it.Language, it.Quantity, it.PriceCOP, it.PriceUSD, it.VariantName).Scan(
 			&item.ID, &item.ListingID, &item.CardID, &item.CardName,
 			&item.Language, &item.Quantity, &item.PriceCOP, &item.PriceUSD,
 			&item.VariantName, &item.GameCode, &item.GameName, &item.ExpansionName,
+			&item.OwnerID, &item.OwnerName,
 		)
 		if err != nil {
 			return sale.Sale{}, fmt.Errorf("crear item de venta: %w", err)
@@ -253,7 +257,8 @@ func scanSale(row pgx.Row) (sale.Sale, error) {
 func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, listing_id, card_id, card_name, language, quantity, price_cop, price_usd,
-		       COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, '')
+		       COALESCE(variant_name, ''), COALESCE(game_code, ''), COALESCE(game_name, ''), COALESCE(expansion_name, ''),
+		       owner_id, COALESCE(owner_name, '')
 		FROM sale_items WHERE sale_id = $1 ORDER BY id
 	`, s.ID)
 	if err != nil {
@@ -266,7 +271,8 @@ func (r *SaleRepository) loadItems(ctx context.Context, s *sale.Sale) error {
 		var it sale.SaleItem
 		if err := rows.Scan(&it.ID, &it.ListingID, &it.CardID, &it.CardName,
 			&it.Language, &it.Quantity, &it.PriceCOP, &it.PriceUSD,
-			&it.VariantName, &it.GameCode, &it.GameName, &it.ExpansionName); err != nil {
+			&it.VariantName, &it.GameCode, &it.GameName, &it.ExpansionName,
+			&it.OwnerID, &it.OwnerName); err != nil {
 			return err
 		}
 		items = append(items, it)
